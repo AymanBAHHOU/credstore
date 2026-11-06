@@ -271,12 +271,14 @@ pub fn is_owner_only(path: &Path) -> OsResult<bool> {
     use crate::sys::current::win;
     let sddl = win::path_security_sddl(path)?;
     let me = win::current_user_sid()?;
-    Ok(sddl_is_owner_only(&sddl, &me))
+    Ok(sddl_is_owner_only(&sddl, &me, &win::canonical_sid))
 }
 
 /// SDDL check behind [`is_owner_only`] (kept separate so it can be unit tested).
+/// `canon` turns SDDL aliases into SID strings: SDDL writes some accounts as aliases
+/// (the built-in Administrator account as `LA`, for example), not as their SID.
 #[cfg(any(windows, test))]
-pub(crate) fn sddl_is_owner_only(sddl: &str, me: &str) -> bool {
+pub(crate) fn sddl_is_owner_only(sddl: &str, me: &str, canon: &dyn Fn(&str) -> String) -> bool {
     // Only the owner (O:) and DACL (D:) sections were asked for; SIDs never contain "D:".
     let Some(d) = sddl.find("D:") else {
         return true; // no DACL section: the owner-only question does not arise
@@ -287,7 +289,13 @@ pub(crate) fn sddl_is_owner_only(sddl: &str, me: &str) -> bool {
     if dacl.starts_with("NO_ACCESS_CONTROL") {
         return false;
     }
-    let allowed = |sid: &str| matches!(sid, "SY" | "BA" | "OW") || sid == owner || sid == me;
+    let owner = canon(owner);
+    let allowed = |sid: &str| {
+        matches!(sid, "SY" | "BA" | "OW") || {
+            let sid = canon(sid);
+            sid == owner || sid == me
+        }
+    };
     dacl.split('(').skip(1).all(|ace| {
         let ace = ace.split(')').next().unwrap_or_default();
         let f: Vec<&str> = ace.split(';').collect();
@@ -348,23 +356,49 @@ mod tests {
     #[test]
     fn sddl_owner_only_check() {
         let me = "S-1-5-21-1-2-3-1001";
+        let id = |s: &str| s.to_string();
+        // An alias for this account counts as this account.
+        let alias = |s: &str| {
+            if s == "LA" {
+                me.to_string()
+            } else {
+                s.to_string()
+            }
+        };
+        assert!(sddl_is_owner_only(
+            "O:BAD:P(A;;FA;;;SY)(A;;FA;;;LA)",
+            me,
+            &alias
+        ));
+        assert!(!sddl_is_owner_only(
+            "O:BAD:P(A;;FA;;;SY)(A;;FA;;;LA)",
+            me,
+            &id
+        ));
         assert!(sddl_is_owner_only(
             "O:S-1-5-21-1-2-3-1001D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;S-1-5-21-1-2-3-1001)",
-            me
+            me,
+            &id
         ));
-        assert!(sddl_is_owner_only("O:BAD:P(A;;FA;;;BA)(A;;FA;;;SY)", me));
+        assert!(sddl_is_owner_only(
+            "O:BAD:P(A;;FA;;;BA)(A;;FA;;;SY)",
+            me,
+            &id
+        ));
         // Users can read: not owner-only.
         assert!(!sddl_is_owner_only(
             "O:BAD:(A;;FA;;;SY)(A;;0x1200a9;;;BU)",
-            me
+            me,
+            &id
         ));
         // Creator Owner entries are inherit-only; deny entries never grant.
         assert!(sddl_is_owner_only(
             "O:BAD:(A;OICIIO;GA;;;CO)(D;;FA;;;WD)(A;;FA;;;BA)",
-            me
+            me,
+            &id
         ));
-        assert!(!sddl_is_owner_only("O:BAD:NO_ACCESS_CONTROL", me));
-        assert!(!sddl_is_owner_only("O:BAD:(A;;FR;;;WD)", me));
+        assert!(!sddl_is_owner_only("O:BAD:NO_ACCESS_CONTROL", me, &id));
+        assert!(!sddl_is_owner_only("O:BAD:(A;;FR;;;WD)", me, &id));
     }
 
     #[test]

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use credstore_proto::PeerInfo;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient, NamedPipeServer};
+use tokio::net::windows::named_pipe::{NamedPipeClient, NamedPipeServer};
 use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY, HANDLE};
 
 use super::win;
@@ -17,9 +17,11 @@ use crate::{
     SERVICE_USER,
 };
 
-/// Rights for clients: read/write data and attributes, sync. Deliberately *not*
-/// FILE_CREATE_PIPE_INSTANCE (0x4, part of GENERIC_WRITE), so a client cannot create a
-/// rogue server instance of the pipe.
+/// Rights for clients: read/write data and attributes, read the owner, sync.
+/// Deliberately *not* FILE_CREATE_PIPE_INSTANCE (0x4, part of GENERIC_WRITE), so a
+/// client cannot create a rogue server instance of the pipe. Clients open the pipe with
+/// exactly these rights (`win::open_pipe_client`); asking for GENERIC_WRITE would be
+/// refused.
 const CLIENT_RIGHTS: &str = "0x120183";
 
 pub struct PipeListener {
@@ -111,7 +113,7 @@ impl IpcListener for PipeListener {
 pub async fn connect(endpoint: &Endpoint, mode: Mode) -> OsResult<PipeStream> {
     let deadline = Instant::now() + Duration::from_secs(5);
     let client = loop {
-        match ClientOptions::new().open(&endpoint.address) {
+        match win::open_pipe_client(&endpoint.address, win::PIPE_CLIENT_ACCESS) {
             Ok(c) => break c,
             Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) => {
                 if Instant::now() > deadline {

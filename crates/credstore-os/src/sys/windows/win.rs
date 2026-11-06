@@ -7,7 +7,7 @@
 use std::ffi::c_void;
 use std::io;
 
-use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
+use tokio::net::windows::named_pipe::{NamedPipeClient, NamedPipeServer, ServerOptions};
 use windows_sys::core::{BOOL, PWSTR};
 use windows_sys::Win32::Foundation::{
     CloseHandle, LocalFree, ERROR_INSUFFICIENT_BUFFER, HANDLE, HLOCAL,
@@ -243,6 +243,41 @@ pub fn create_pipe_server(name: &str, sddl: &str, first: bool) -> io::Result<Nam
     unsafe { opts.create_with_security_attributes_raw(name, &mut sa as *mut _ as *mut c_void) }
 }
 
+/// Access a client asks for on a pipe: FILE_READ_DATA | FILE_WRITE_DATA |
+/// FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE. Matches the
+/// rights the pipe ACL grants the credstore groups (`CLIENT_RIGHTS` in `ipc.rs`).
+pub const PIPE_CLIENT_ACCESS: u32 = 0x0012_0183;
+
+/// Open the client end of a named pipe with exactly `access`, for overlapped I/O, at
+/// identification level (the server may query the client's token but not act as it).
+pub fn open_pipe_client(name: &str, access: u32) -> io::Result<NamedPipeClient> {
+    use std::os::windows::io::RawHandle;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_FLAG_OVERLAPPED, OPEN_EXISTING, SECURITY_IDENTIFICATION,
+        SECURITY_SQOS_PRESENT,
+    };
+    let w = wide(name);
+    // SAFETY: `w` is NUL-terminated; no security attributes or template handle.
+    let h = unsafe {
+        CreateFileW(
+            w.as_ptr(),
+            access,
+            0,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
+            std::ptr::null_mut(),
+        )
+    };
+    if h == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `h` is a fresh pipe handle opened for overlapped I/O, owned by nobody
+    // else; tokio takes ownership and closes it.
+    unsafe { NamedPipeClient::from_raw_handle(h as RawHandle) }
+}
+
 /// Identity of the client on a server pipe handle, read by briefly impersonating it.
 /// Returns the client's user SID and whether its token is a member of `group_sid`.
 /// The client must already have written to the pipe (Windows takes the identity from the
@@ -446,6 +481,16 @@ pub fn token_has_sid(sid: &str) -> io::Result<bool> {
     // SAFETY: a null token means this thread's effective token; `sid` is a valid SID.
     check(unsafe { CheckTokenMembership(std::ptr::null_mut(), sid.ptr(), &mut member) })?;
     Ok(member != 0)
+}
+
+/// The `S-1-...` form of a SID written as SDDL (an alias like `BA` or `LA`, or already
+/// a SID string). Unknown text is returned unchanged.
+pub fn canonical_sid(s: &str) -> String {
+    match string_to_sid(s) {
+        // SAFETY: `string_to_sid` returned a valid SID.
+        Ok(sid) => unsafe { sid_to_string(sid.ptr()) }.unwrap_or_else(|_| s.to_string()),
+        Err(_) => s.to_string(),
+    }
 }
 
 /// Owner and DACL of a file or directory, as SDDL text.
