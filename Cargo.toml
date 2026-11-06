@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/credstore-proto",
+    "crates/credstore-core",
+    "crates/credstore-os",
+    "crates/credstored",
+    "crates/credstore",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+credstore-proto = { path = "crates/credstore-proto" }
+credstore-core = { path = "crates/credstore-core" }
+credstore-os = { path = "crates/credstore-os" }
+
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+directories = "6"
+rpassword = "7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", default-features = false }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+zeroize = "1"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"

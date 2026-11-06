@@ -1,0 +1,26 @@
+[package]
+name = "credstore-os"
+description = "credstore platform layer: IPC, peer identity, sandbox, memory hardening, paths"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+credstore-proto.workspace = true
+directories.workspace = true
+rpassword.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "macros", "rt"] }
+
+# This crate is the one place allowed to hold small, commented `unsafe` modules for
+# platform calls the safe crates do not cover. It denies (not forbids) unsafe so such a
+# module can opt in with `#[allow(unsafe_code)]`. M0 has none.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"

@@ -1,0 +1,19 @@
+[package]
+name = "credstore"
+description = "credstore CLI and MCP shim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+credstore-core.workspace = true
+credstore-os.workspace = true
+credstore-proto.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

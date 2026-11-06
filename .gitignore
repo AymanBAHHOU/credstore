@@ -1,0 +1,6 @@
+/target
+**/*.rs.bk
+*.age
+index.json
+audit.jsonl
+.env*
