@@ -99,8 +99,8 @@ async fn daemon_starts_locked_and_lock_wipes() {
 async fn idle_vault_relocks() {
     let d = TestDaemon::start("m2idle").await;
     d.init_vault().await;
-    d.daemon()
-        .set_idle_ttl(std::time::Duration::from_millis(300));
+    // Long enough that a loaded runner still sees it unlocked right after the unlock.
+    d.daemon().set_idle_ttl(std::time::Duration::from_secs(2));
     expect_ok(
         d.client()
             .approver(ApproverOp::Unlock, pass())
@@ -109,7 +109,7 @@ async fn idle_vault_relocks() {
     )
     .unwrap();
     assert!(d.daemon().is_unlocked());
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     assert!(!d.daemon().is_unlocked());
     assert_eq!(d.records("lock").pop().unwrap()["reason"], "idle");
     d.stop().await;
