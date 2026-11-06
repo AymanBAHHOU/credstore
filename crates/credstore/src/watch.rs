@@ -111,6 +111,9 @@ pub fn show(r: &PendingRequest, out: &mut dyn Write) -> anyhow::Result<()> {
         format!(" ({})", printable(&r.allow_hosts.join(", ")))
     };
     writeln!(out, "sandbox:  {sandbox}    network: {network}{hosts}")?;
+    for gap in &r.sandbox_gaps {
+        writeln!(out, "  NOT ENFORCED: {}", printable(gap))?;
+    }
     let mut from = Vec::new();
     if let Some(uid) = r.peer.uid {
         from.push(format!("uid {uid}"));

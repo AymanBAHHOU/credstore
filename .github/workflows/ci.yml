@@ -22,9 +22,30 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # Linux: bubblewrap is the preferred sandbox. Ubuntu 24.04 blocks unprivileged
+      # user namespaces through AppArmor by default; allow them so bwrap works.
+      - name: Install bubblewrap (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --ro-bind / / true && echo "bwrap works"
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      # Again with the Landlock fallback (what a machine without bubblewrap gets).
+      - name: Adversarial suite with Landlock only (Linux)
+        if: runner.os == 'Linux'
+        run: cargo test -p credstore-tests --test m5_adversarial
+        env:
+          CREDSTORE_FORCE_SANDBOX: landlock
+      # And with no sandbox at all: gaps must be reported, and process-tree kill,
+      # caps, redaction and cleanup must still hold.
+      - name: Adversarial suite without a sandbox
+        run: cargo test -p credstore-tests --test m5_adversarial
+        env:
+          CREDSTORE_FORCE_SANDBOX: none
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny

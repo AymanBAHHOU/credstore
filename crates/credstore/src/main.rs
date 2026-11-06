@@ -91,7 +91,8 @@ fn main() -> ExitCode {
         }
     };
     match rt.block_on(run(cli)) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(0) => ExitCode::SUCCESS,
+        Ok(code) => ExitCode::from(u8::try_from(code).ok().filter(|c| *c != 0).unwrap_or(1)),
         Err(e) => {
             eprintln!("credstore: error: {e:#}");
             ExitCode::FAILURE
@@ -99,14 +100,22 @@ fn main() -> ExitCode {
     }
 }
 
-async fn run(cli: Cli) -> anyhow::Result<()> {
+/// Returns the process exit code (the child's, for `credstore run`).
+async fn run(cli: Cli) -> anyhow::Result<i32> {
     let mode = if cli.dev { Mode::Dev } else { Mode::Installed };
     let platform = Platform::new(mode)?;
     let client = Client::new(platform.clone());
     let prompt = TerminalPrompt(&platform);
     let mut msg = std::io::stderr();
     let mut out = std::io::stdout();
-    match cli.command {
+    let done = match cli.command {
+        Command::Run {
+            secrets,
+            reason,
+            argv,
+        } => {
+            return commands::run(&client, secrets, reason, argv, &prompt, &mut out, &mut msg).await
+        }
         Command::Init => commands::init(&client, &prompt, &mut msg).await,
         Command::Set { name, description } => {
             commands::set(&client, &name, description, &prompt, &mut msg).await
@@ -124,10 +133,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             (None, false) => commands::audit_show(platform.audit_log(), &mut out),
         },
         Command::Watch => credstore::watch::watch(&client, &prompt, &mut out).await,
-        Command::Run { .. } => not_built("M5"),
         Command::Mcp => not_built("M6"),
         Command::Doctor => not_built("M7"),
-    }
+    };
+    done.map(|()| 0)
 }
 
 fn not_built(milestone: &str) -> anyhow::Result<()> {

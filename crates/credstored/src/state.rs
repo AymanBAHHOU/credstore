@@ -7,8 +7,7 @@ use std::time::{Duration, Instant};
 use credstore_core::audit::AuditLog;
 use credstore_core::policy::Policy;
 
-use crate::approvals::{Approvals, Values};
-use crate::run::Prepared;
+use crate::approvals::Approvals;
 use credstore_core::vault::{Vault, VaultContents, VaultError};
 use credstore_os::{exec, Mode, Paths, Platform};
 use credstore_proto::{
@@ -334,7 +333,11 @@ impl State {
             }
             // Streamed by the server after `verify`.
             ApproverOp::SubscribePending => error(ErrorCode::BadRequest, "subscribe is streamed"),
-            ApproverOp::AdminRun(_) => error(ErrorCode::Unsupported, "not built yet"),
+            ApproverOp::AdminRun(run) => {
+                // The run can take minutes; other approver requests must not wait on it.
+                drop(_ops);
+                self.admin_run(run, contents, peer).await
+            }
         }
     }
 
@@ -342,20 +345,6 @@ impl State {
     pub async fn verify(&self, proof: &Proof, peer: &PeerInfo) -> Result<(), Response> {
         let _ops = self.vault_ops.lock().await;
         self.verify_proof(proof, peer).await.map(drop)
-    }
-
-    /// Step 7. Until the runner exists (M5) the approved values are dropped (zeroized).
-    pub async fn execute(&self, prepared: Prepared, values: Values) -> Response {
-        drop(values);
-        let idle = *self.idle_ttl.lock().unwrap_or_else(|p| p.into_inner());
-        if idle.is_zero() {
-            self.relock("after-run");
-        }
-        let _ = prepared;
-        error(
-            ErrorCode::Unsupported,
-            "approved, but running commands is not built yet",
-        )
     }
 
     async fn admin_init(&self, proof: &Proof, peer: &PeerInfo) -> Response {

@@ -48,8 +48,9 @@ These settle gaps in the spec. They were confirmed by the human, not guessed.
 
 - Traits: `Paths`, `Ipc` (+ `IpcListener`, `IpcStream`), `PeerIdentity`, `Sandbox`,
   `MemoryGuard`, `ServiceInstall`, `Terminal`. One `Platform` struct implements all of
-  them for the target OS. The trait shapes for `Sandbox` and `MemoryGuard` may change when
-  M5 and M2 build the real implementations.
+  them for the target OS. `Sandbox` only probes and plans (`sandbox_capabilities`,
+  `sandbox_plan`); `credstore_os::run::run` applies the plan, because the runner and the
+  sandbox wrap the same spawn.
 - `Ipc` uses `-> impl Future + Send` methods (no `async-trait` dependency); it is not
   object-safe, and callers are generic over it.
 - The crate uses `unsafe_code = "deny"` instead of `forbid`, so a small commented module
@@ -285,22 +286,116 @@ These settle gaps in the spec. They were confirmed by the human, not guessed.
   that number. Values handed to an approved request are dropped (and zeroized) after
   use. Reading freed memory to prove it would need `unsafe` in tests, which the
   workspace forbids.
-- **Until M5,** an approved request is answered with `approved, but running commands is
-  not built yet`.
+
+## Runner, sandbox and redaction (M5)
+
+**Order of a run.** `prepare_run` validates, checks policy, refuses a cwd inside
+credstore's own files, and plans the sandbox, all before the human is asked, so the
+approval screen shows the sandbox mode and every gap (`sandbox_gaps` on
+`PendingRequest`, shown as `NOT ENFORCED: ...` lines in `watch`). After approval the
+runner (`credstored::runner`):
+
+1. creates `<run_dir>/<request id>/` with `tmp/` and `files/` (0700; on Windows a
+   protected DACL for this user and SYSTEM), removed by a drop guard on every exit path,
+   panics included;
+2. builds a cleared environment: `PATH` (the daemon's absolute `PATH` entries), `HOME`
+   (`USERPROFILE` on Windows), `TMPDIR` (`TEMP`/`TMP`), `LANG` on Unix, and on Windows
+   `SystemRoot`, `SystemDrive`, `windir`, `ComSpec`, `PATHEXT`,
+   `PROCESSOR_ARCHITECTURE`, `NUMBER_OF_PROCESSORS`, plus only the approved secrets
+   (names compared case-insensitively on Windows);
+3. writes `run_started` to the audit log, and does not run if that write fails;
+4. runs, kills the whole process tree whatever happened, redacts, writes `run_finished`
+   (`exit_code`, `duration_ms`, `sandbox`, `stdout_bytes`, `stderr_bytes`, `truncated`,
+   `timed_out`, `output_limit_hit`, `redactions`), and returns the result.
+
+- **HOME.** Dev mode gives the child the human's real home (the daemon runs as the human,
+  and tools need their config). Installed mode gives it the run's temp dir, since the
+  daemon's home is the service account's.
+- **Installed mode runs commands as the service user** (`credstore`), not as the human.
+  Commands that need the human's files or credentials (ssh keys, git config) will not
+  find them. Running as the requesting user needs a privileged helper; not in v1.
+- **File injection**: `NAME_FILE=<run dir>/files/NAME`, mode 0400. In dev mode the run
+  dir is not on tmpfs (it lives in the credstore home); installed Linux uses
+  `/run/credstore/run`, which is tmpfs.
+- **Timeout and caps.** The request's `timeout_secs` can only lower the policy maximum.
+  Each of stdout and stderr is capped at `max_output_bytes`; going over kills the tree
+  (a 1 GB flood is stopped as soon as it reaches the cap). Output pipes get 2 s to close after the
+  kill. The agent sees `[credstore: ... was killed]` lines appended to stderr.
+- **Process tree kill.** Unix: the child starts in a new session (`setsid` in
+  `pre_exec`) and the whole process group gets `SIGKILL`. A descendant that calls
+  `setsid` itself leaves the group and survives; under bubblewrap the PID namespace and
+  `--die-with-parent` catch it, under Landlock or no sandbox they do not (known gap).
+  Windows: the child starts suspended, is put in a Job Object, then resumed, so nothing
+  runs outside the job; the job has kill-on-close, at most 512 processes and 4 GiB of
+  committed memory, and is terminated at the end of every run.
+- **`credstore run`** sends `admin_run` with the passphrase; that passphrase is the
+  approval (audited as `approved` with `via: "admin"`). Policy still applies. The daemon
+  releases its approver lock while the command runs.
+- **Startup sweep**: the daemon empties its run dir at start and audits
+  `run_dir_swept` if anything was left (a daemon killed mid-run).
+- **Windows working directories** drop the `\\?\` prefix `canonicalize` adds (`cmd.exe`
+  refuses it as a cwd); program paths are shown the same way.
+
+**Sandbox per OS** (probed once; `credstored` logs the result at startup):
+
+| OS      | Mode         | Files                                                   | Network deny | Notes |
+| ------- | ------------ | ------------------------------------------------------- | ------------ | ----- |
+| Linux   | `bwrap`      | read-only `/`, writable cwd and run tmp, credstore paths replaced by empty tmpfs or `/dev/null`; new PID/IPC/UTS namespaces | yes (`--unshare-net`) | needs unprivileged user namespaces (Ubuntu 24.04: AppArmor sysctl) |
+| Linux   | `landlock`   | read anywhere except credstore paths, write only cwd and run tmp | kernel 6.7+ (Landlock ABI 4), else a gap | applied in `pre_exec`; also stops ptrace of the daemon |
+| macOS   | `seatbelt`   | `sandbox-exec` profile: writes only cwd and run tmp, credstore paths unreadable | yes (`deny network*`) | `sandbox-exec` is deprecated by Apple but works |
+| Windows | `job-object` | **not hidden** (gap is reported)                         | **no** (`require` denies) | see below |
+| any     | `none`       | not restricted (gap is reported)                        | no           | `require` denies |
+
+- `sandbox = "require"` denies a run whose plan has any gap (no sandbox, network deny not
+  enforceable, `allow-list` network); `prefer` runs and lists the gaps; `off` runs with
+  no sandbox. Process-tree kill, caps, cleared environment and redaction apply in every
+  mode, sandbox or not.
+- **`network = "allow-list"` is never enforced in v1.** `allow_hosts` needs the v2 auth
+  proxy. With `require` it is denied; with `prefer` the command has normal network
+  access and the gap says so.
+- **Windows deviation from spec 4.1:** no restricted token yet. `tokio::process` cannot
+  start a process with another token, and doing it by hand (`CreateProcessAsUserW` plus
+  pipe plumbing) is a large unsafe surface for a weak gain (a restricted token does not
+  hide files the user owns). AppContainer, which can, is on the v2 list. So on Windows the
+  command can read the vault file (encrypted), policy and audit log in dev mode; in
+  installed mode they belong to the service account.
+- `CREDSTORE_FORCE_SANDBOX=landlock|none` can only downgrade the sandbox. CI uses it to
+  run the adversarial suite on each fallback.
+
+**Redaction** (`credstore-core::redact`): exact value, value without a trailing newline,
+each line of a multi-line value, URL-encoded (upper/lower hex, `+` or `%20`), hex
+(upper/lower), JSON-escaped, base64 in all three alignments in the standard and URL-safe
+alphabets. Values under 6 characters are skipped (`set` warns). When a stream was cut
+(cap, timeout), a trailing partial match is masked too. Matching is longest pattern first.
+Known bypasses (reversed, rot13, split, compressed) are documented and the reversed test
+is `#[ignore]`d.
+
+**Adversarial suite** (`tests/m5_adversarial.rs`, helper binary `credstore-adversary`):
+environment dumps (`env`, `printenv`, `sh -c set`, `/proc/self/environ`; `cmd /c set`,
+`cmd /c echo %KEY%`, PowerShell `Env:`), encodings, reading credstore's files and writing
+outside cwd, reading daemon memory (Linux `/proc/<pid>/mem`, Windows `OpenProcess` with
+`PROCESS_VM_READ`; skipped on macOS, where `task_for_pid` cannot even be attempted
+without entitlements), network deny, a background process outliving the timeout, a 1 GB
+flood, file and stdin injection cleanup, concurrent approvals, and the startup sweep.
+Every test checks the value is absent from results, the audit log, every file under the
+test tree, and all `tracing` output (captured in-process). Endpoint misuse and bad input
+are in `m2_daemon.rs` and `m3_policy.rs`. Running as root without a sandbox skips the
+memory test (root reads any process).
 
 ## Stubbed per OS
 
 | Capability      | Linux                 | macOS                 | Windows               |
 | --------------- | --------------------- | --------------------- | --------------------- |
 | Paths           | done                  | done                  | done                  |
-| Private files   | done (0600/0700)      | done (0600/0700)      | stub, M7 (inherits folder ACL) |
+| Private files   | done (0600/0700)      | done (0600/0700)      | done for dirs credstore creates (protected DACL); ACL check stub, M7 |
 | Atomic replace  | done                  | done                  | done                  |
 | Terminal prompt | done (`rpassword`)    | done (`rpassword`)    | done (`rpassword`)    |
 | IPC             | done (Unix socket)    | done (Unix socket), CI only | done (named pipe) |
 | Peer identity   | done (uid, pid, exe)  | done (uid, pid; no exe) | done (SID, pid, exe) |
 | Group check     | done, untested (needs install) | done, untested | done, untested |
 | Memory guard    | dumpable, core limit; no mlock | deny-attach, core limit; no mlock | DACL; WER partial; no VirtualLock |
-| Sandbox         | stub, M5              | stub, M5              | stub, M5              |
+| Runner          | done (session + killpg) | done (session + killpg), CI only | done (suspended start + Job Object) |
+| Sandbox         | done (bwrap, Landlock) | done (Seatbelt), CI only | Job Object only (no file hiding, no network deny) |
 | Service install | stub, M7              | stub, M7              | stub, M7              |
 
 Stubs return `OsError::Unavailable("<mechanism> not built yet (Mx)")`; the daemon logs
@@ -328,4 +423,6 @@ real terminal is not, since CI has none.
 ## CI
 
 `.github/workflows/ci.yml` runs fmt, clippy (`-D warnings`), tests and `cargo deny check`
-on `windows-latest`, `ubuntu-latest` and `macos-latest`.
+on `windows-latest`, `ubuntu-latest` and `macos-latest`. On Ubuntu it installs
+bubblewrap and allows unprivileged user namespaces, then runs the adversarial suite
+twice more: with `CREDSTORE_FORCE_SANDBOX=landlock` (Linux) and `=none` (every OS).

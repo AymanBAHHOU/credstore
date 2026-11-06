@@ -15,9 +15,7 @@ async fn ready(tag: &str) -> TestDaemon {
 }
 
 fn cwd(d: &TestDaemon) -> std::path::PathBuf {
-    let p = d.home.join("project");
-    std::fs::create_dir_all(&p).unwrap();
-    p
+    d.work()
 }
 
 #[tokio::test(flavor = "multi_thread")]

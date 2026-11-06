@@ -9,6 +9,30 @@ use std::path::{Path, PathBuf};
 
 use crate::{OsError, OsResult};
 
+/// Canonical form of an existing directory, or `None`. On Windows the `\\?\C:\` prefix
+/// that `canonicalize` adds is dropped: `cmd.exe` and many tools cannot use it as a
+/// working directory.
+pub fn canonical_dir(path: &Path) -> Option<PathBuf> {
+    let c = std::fs::canonicalize(path).ok().filter(|p| p.is_dir())?;
+    Some(simplify(c))
+}
+
+/// Canonical form of an existing path (file or directory), simplified as above.
+pub fn canonical_path(path: &Path) -> Option<PathBuf> {
+    std::fs::canonicalize(path).ok().map(simplify)
+}
+
+fn simplify(p: PathBuf) -> PathBuf {
+    if cfg!(windows) {
+        let s = p.to_string_lossy();
+        let b = s.as_bytes();
+        if b.len() >= 7 && s.starts_with(r"\\?\") && b[5] == b':' && b[6] == b'\\' {
+            return PathBuf::from(&s[4..]);
+        }
+    }
+    p
+}
+
 /// Directories searched for bare program names: the daemon's own `PATH`, absolute
 /// entries only.
 pub fn search_path() -> Vec<PathBuf> {
@@ -54,7 +78,7 @@ pub fn resolve_program(program: &str, cwd: &Path, dirs: &[PathBuf]) -> OsResult<
 }
 
 fn canonical(p: PathBuf) -> OsResult<PathBuf> {
-    Ok(std::fs::canonicalize(p)?)
+    Ok(simplify(std::fs::canonicalize(p)?))
 }
 
 fn not_found(program: &str) -> OsError {
@@ -141,7 +165,7 @@ mod tests {
         assert!(resolve_program(local, &dir, &dirs).is_err());
         let explicit = format!("./{local}");
         let found = resolve_program(&explicit, &dir, &dirs).unwrap();
-        assert!(found.starts_with(std::fs::canonicalize(&dir).unwrap()));
+        assert!(found.starts_with(canonical_dir(&dir).unwrap()));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -7,6 +7,7 @@
 pub mod audit;
 pub mod names;
 pub mod policy;
+pub mod redact;
 pub mod request;
 pub mod util;
 pub mod vault;

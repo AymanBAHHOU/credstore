@@ -60,7 +60,19 @@ fn without_terminal(bin: &Path) -> Option<Command> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn piped_stdin_cannot_approve() {
-    let home = std::env::temp_dir().join(format!("cs-watchstdin-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!(
+        "cs-watchstdin-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+            % 1_000_000_000
+    ));
+    let home = root.join("home");
+    // The command's cwd may not be inside the credstore home.
+    let work = root.join("work");
+    std::fs::create_dir_all(&work).unwrap();
     let paths = PlatformPaths::dev_with_home(&home);
     let daemon = credstored::start(credstored::DaemonConfig {
         paths: paths.clone(),
@@ -92,7 +104,7 @@ async fn piped_stdin_cannot_approve() {
         .unwrap();
 
     let agent = client.clone();
-    let cwd = home.to_string_lossy().into_owned();
+    let cwd = work.to_string_lossy().into_owned();
     let request = tokio::spawn(async move {
         agent
             .agent(&AgentRequest::Run(RunRequest {
@@ -182,5 +194,5 @@ async fn piped_stdin_cannot_approve() {
     assert!(matches!(r, Response::Ok));
     assert!(matches!(request.await.unwrap(), Response::Denied { .. }));
     daemon.shutdown().await;
-    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&root);
 }

@@ -35,6 +35,11 @@ use windows_sys::Win32::System::Threading::{
 pub struct OwnedHandle(HANDLE);
 
 impl OwnedHandle {
+    /// Take ownership of a valid handle.
+    pub fn from_raw(h: HANDLE) -> Self {
+        Self(h)
+    }
+
     pub fn raw(&self) -> HANDLE {
         self.0
     }
@@ -214,7 +219,7 @@ impl SecurityDescriptor {
         Ok(Self(LocalBox(sd)))
     }
 
-    fn ptr(&self) -> PSECURITY_DESCRIPTOR {
+    pub(crate) fn ptr(&self) -> PSECURITY_DESCRIPTOR {
         self.0.ptr()
     }
 }

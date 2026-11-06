@@ -1,13 +1,13 @@
-//! Run requests up to the policy decision (spec 6.2 steps 1 to 3).
+//! Run requests up to the policy and sandbox decision (spec 6.2 steps 1 to 3).
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use credstore_core::policy::{self, Command, Effective, MatchStyle, Policy};
+use credstore_core::policy::{self, Command, Effective, MatchStyle, Policy, SandboxRequirement};
 use credstore_core::request;
 use credstore_core::util::new_id;
 use credstore_core::vault::VaultError;
-use credstore_os::{exec, fs as osfs, Mode, Paths};
+use credstore_os::{exec, fs as osfs, Mode, Paths, Sandbox, SandboxNeed, SandboxPlan};
 use credstore_proto::{ErrorCode, Injection, PeerInfo, Response, RunRequest, SecretInfo};
 use serde_json::json;
 
@@ -15,7 +15,6 @@ use crate::state::{error, peer_json, State};
 
 /// A request that passed validation and policy, ready for approval.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // read by the approval flow and the runner (M4, M5)
 pub(crate) struct Prepared {
     pub id: String,
     pub req: RunRequest,
@@ -26,6 +25,8 @@ pub(crate) struct Prepared {
     pub program: Option<PathBuf>,
     pub secrets: Vec<SecretInfo>,
     pub effective: Effective,
+    /// Sandbox this run will get (planned before the human is asked).
+    pub sandbox: SandboxPlan,
 }
 
 pub(crate) fn match_style() -> MatchStyle {
@@ -51,8 +52,7 @@ impl State {
         let path = self.platform.policy_file();
         let loaded = match std::fs::read_to_string(path) {
             Ok(text) => Policy::parse_with(&text, match_style(), &|d| {
-                std::fs::canonicalize(d)
-                    .ok()
+                exec::canonical_path(std::path::Path::new(d))
                     .map(|c| c.to_string_lossy().into_owned())
             })
             .map_err(|e| e.to_string()),
@@ -134,15 +134,12 @@ impl State {
             }
         }
 
-        let cwd = std::fs::canonicalize(&req.cwd)
-            .ok()
-            .filter(|p| p.is_dir())
-            .ok_or_else(|| {
-                error(
-                    ErrorCode::BadRequest,
-                    "cwd does not exist or is not a directory",
-                )
-            })?;
+        let cwd = exec::canonical_dir(std::path::Path::new(&req.cwd)).ok_or_else(|| {
+            error(
+                ErrorCode::BadRequest,
+                "cwd does not exist or is not a directory",
+            )
+        })?;
 
         let program = match &req.argv {
             Some(argv) => Some(
@@ -196,6 +193,24 @@ impl State {
             })
             .map_err(|d| deny(d.0))?;
 
+        // The run may write its cwd, so it must not be one of credstore's own paths.
+        if let Some(h) = self.hidden_paths().iter().find(|h| cwd.starts_with(h)) {
+            return Err(deny(format!(
+                "cwd is inside credstore's own files ({})",
+                h.display()
+            )));
+        }
+
+        let need = match effective.sandbox {
+            SandboxRequirement::Require => SandboxNeed::Require,
+            SandboxRequirement::Prefer => SandboxNeed::Prefer,
+            SandboxRequirement::Off => SandboxNeed::Off,
+        };
+        let sandbox = self
+            .platform
+            .sandbox_plan(need, effective.network)
+            .map_err(|why| deny(format!("sandbox = \"require\", but {why}")))?;
+
         Ok(Prepared {
             id,
             req,
@@ -204,6 +219,22 @@ impl State {
             program,
             secrets,
             effective,
+            sandbox,
         })
+    }
+
+    /// Paths a run must not see (spec 6.4): vault and index, policy, audit log, and the
+    /// run directories. Canonical where they exist.
+    pub fn hidden_paths(&self) -> Vec<PathBuf> {
+        let p = &self.platform;
+        [
+            p.data_dir().to_path_buf(),
+            p.policy_file().to_path_buf(),
+            p.audit_log().to_path_buf(),
+            p.run_dir().to_path_buf(),
+        ]
+        .into_iter()
+        .map(|x| exec::canonical_path(&x).unwrap_or(x))
+        .collect()
     }
 }

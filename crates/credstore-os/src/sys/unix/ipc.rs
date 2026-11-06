@@ -74,7 +74,7 @@ fn check_socket_dir(dir: &Path, access: &EndpointAccess) -> OsResult<()> {
     };
     if !meta.is_dir() || meta.uid() != Uid::effective().as_raw() || mode & open_bits != 0 {
         return Err(OsError::Denied(format!(
-            "refusing to use socket directory {}: it must be a directory owned by this user              with mode 0700 (found owner uid {}, mode {:o})",
+            "refusing to use socket directory {}: it must be a directory owned by this user with mode 0700 (found owner uid {}, mode {:o})",
             dir.display(),
             meta.uid(),
             mode

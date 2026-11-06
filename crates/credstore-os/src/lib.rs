@@ -10,18 +10,21 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 
-use credstore_proto::{NetworkPolicy, PeerInfo, SandboxMode, SecretText};
+use credstore_proto::{NetworkPolicy, PeerInfo, SecretText};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 pub mod exec;
 pub mod fs;
 mod paths;
 mod platform;
+pub mod run;
+pub mod sandbox;
 pub mod signals;
 mod sys;
 
 pub use paths::{PlatformPaths, CREDSTORE_HOME_ENV};
 pub use platform::Platform;
+pub use sandbox::{SandboxCapabilities, SandboxNeed, SandboxPlan, SandboxSpec};
 
 /// Name of the OS this build targets: `"linux"`, `"macos"` or `"windows"`.
 pub const OS_NAME: &str = std::env::consts::OS;
@@ -160,39 +163,16 @@ pub trait Ipc {
 // Sandbox
 // ---------------------------------------------------------------------------
 
-/// What a run is allowed to touch.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SandboxSpec {
-    /// Writable paths (the run's cwd and its temp dir). Everything else is read-only.
-    pub writable: Vec<PathBuf>,
-    /// Paths the child must not see at all (vault, policy, audit).
-    pub hidden: Vec<PathBuf>,
-    pub network: NetworkPolicy,
-    pub allow_hosts: Vec<String>,
-}
-
-/// What the sandbox can do on this machine.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SandboxCapabilities {
-    /// Best mechanism available.
-    pub mode: SandboxMode,
-    /// Whether network access can be restricted per process.
-    pub network_restriction: bool,
-}
-
-/// A command rewritten to run inside the sandbox.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SandboxPlan {
-    pub argv: Vec<String>,
-    pub mode: SandboxMode,
-}
-
+/// Sandbox capabilities and per-run planning. The runner (`run::run`) applies the plan.
 pub trait Sandbox {
-    fn capabilities(&self) -> OsResult<SandboxCapabilities>;
-    /// Wrap `argv` so it runs confined by `spec`. Errors if `spec` cannot be met.
-    fn plan(&self, argv: &[String], spec: &SandboxSpec) -> OsResult<SandboxPlan>;
-    /// Called with the child's PID right after spawn (Windows: assign to the Job Object).
-    fn attach(&self, pid: u32) -> OsResult<()>;
+    /// What this machine can enforce (probed once per process).
+    fn sandbox_capabilities(&self) -> &'static SandboxCapabilities;
+    /// The sandbox a run will get, or why policy requires a denial.
+    fn sandbox_plan(
+        &self,
+        need: SandboxNeed,
+        network: NetworkPolicy,
+    ) -> Result<SandboxPlan, String>;
 }
 
 // ---------------------------------------------------------------------------

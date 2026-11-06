@@ -159,6 +159,56 @@ pub async fn status(client: &Client, p: &dyn Prompt, out: &mut dyn Write) -> any
     Ok(())
 }
 
+/// Reason sent with `credstore run` when the human gives none.
+pub const DEFAULT_RUN_REASON: &str = "Run by the human from a terminal with credstore run";
+
+/// `credstore run`: the passphrase typed here is the approval. Prints the (redacted)
+/// output and returns the command's exit code.
+pub async fn run(
+    client: &Client,
+    secrets: Vec<String>,
+    reason: Option<String>,
+    argv: Vec<String>,
+    p: &dyn Prompt,
+    out: &mut dyn Write,
+    msg: &mut dyn Write,
+) -> anyhow::Result<i32> {
+    let cwd = std::env::current_dir()?;
+    let req = credstore_proto::RunRequest {
+        argv: Some(argv),
+        shell: None,
+        secrets,
+        reason: reason.unwrap_or_else(|| DEFAULT_RUN_REASON.to_owned()),
+        cwd: cwd.to_string_lossy().into_owned(),
+        timeout_secs: None,
+        injection: None,
+    };
+    let pass = p.secret("Vault passphrase to run this command: ")?;
+    match client.approver(ApproverOp::AdminRun(req), pass).await? {
+        Response::RunResult(r) => {
+            out.write_all(r.stdout.as_bytes())?;
+            out.flush()?;
+            msg.write_all(r.stderr.as_bytes())?;
+            if r.truncated {
+                writeln!(msg, "credstore: output was truncated")?;
+            }
+            if r.redactions > 0 {
+                writeln!(
+                    msg,
+                    "credstore: {} secret value(s) were redacted from the output",
+                    r.redactions
+                )?;
+            }
+            Ok(r.exit_code.unwrap_or(1))
+        }
+        Response::Denied { reason } => anyhow::bail!("denied: {reason}"),
+        other => {
+            expect_ok(other)?;
+            anyhow::bail!("unexpected reply from the daemon")
+        }
+    }
+}
+
 pub async fn reload(client: &Client, p: &dyn Prompt, msg: &mut dyn Write) -> anyhow::Result<()> {
     let pass = p.secret("Vault passphrase: ")?;
     expect_ok(client.approver(ApproverOp::Reload, pass).await?)?;

@@ -363,6 +363,7 @@ dependencies = [
  "tokio",
  "tracing",
  "windows-sys",
+ "zeroize",
 ]
 
 [[package]]
@@ -387,6 +388,8 @@ dependencies = [
  "credstored",
  "serde_json",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

@@ -26,7 +26,11 @@ pub fn pass() -> SecretText {
 }
 
 /// A daemon on a temp home, plus a client for it.
+///
+/// Layout: `<root>/home` is the credstore home (vault, policy, audit log; a run may not
+/// use it as its cwd) and `<root>/work` is a project folder for commands.
 pub struct TestDaemon {
+    pub root: PathBuf,
     pub home: PathBuf,
     pub platform: Platform,
     daemon: Option<RunningDaemon>,
@@ -34,7 +38,7 @@ pub struct TestDaemon {
 
 impl TestDaemon {
     pub async fn start(tag: &str) -> Self {
-        let home = std::env::temp_dir().join(format!(
+        let root = std::env::temp_dir().join(format!(
             "cs-{tag}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
@@ -43,10 +47,12 @@ impl TestDaemon {
                 .as_nanos()
                 % 1_000_000_000
         ));
-        Self::start_at(home).await
+        Self::start_at(root.join("home")).await
     }
 
+    /// Start on `home` (`<root>/home`; see [`TestDaemon`]).
     pub async fn start_at(home: PathBuf) -> Self {
+        let root = home.parent().expect("home has a parent").to_path_buf();
         let paths = PlatformPaths::dev_with_home(&home);
         let daemon = credstored::start(DaemonConfig {
             paths: paths.clone(),
@@ -54,10 +60,19 @@ impl TestDaemon {
         .await
         .expect("daemon starts");
         Self {
+            root,
             home,
             platform: Platform::with_paths(paths),
             daemon: Some(daemon),
         }
+    }
+
+    /// A project folder outside the credstore home (created on first use).
+    pub fn work(&self) -> PathBuf {
+        let w = self.root.join("work");
+        std::fs::create_dir_all(&w).unwrap();
+        // Canonical, so it matches what the daemon reports and what policy sees.
+        credstore_os::exec::canonical_dir(&w).unwrap()
     }
 
     pub fn client(&self) -> Client {
@@ -230,11 +245,11 @@ impl TestDaemon {
             }
         }
         let mut out = Vec::new();
-        walk(&self.home, &mut out);
+        walk(&self.root, &mut out);
         out
     }
 
-    /// Assert no file under the home contains `needle`.
+    /// Assert no file under the test root (home and work folder) contains `needle`.
     pub fn assert_not_on_disk(&self, needle: &str) {
         for f in self.all_files() {
             if let Ok(bytes) = std::fs::read(&f) {
@@ -252,7 +267,7 @@ impl Drop for TestDaemon {
     fn drop(&mut self) {
         if self.daemon.is_some() {
             // Not shut down cleanly (test panicked); best effort cleanup.
-            let _ = std::fs::remove_dir_all(&self.home);
+            let _ = std::fs::remove_dir_all(&self.root);
         }
     }
 }
@@ -317,12 +332,9 @@ pub fn run_request(argv: &[&str], secrets: &[&str], cwd: &Path) -> RunRequest {
     }
 }
 
-/// What the agent gets once a request is approved, until the runner exists (M5).
-pub const APPROVED_NOT_RUN: &str = "approved, but running commands is not built yet";
-
-/// True if the request was approved (and, until M5, not run).
+/// True if the request was approved and run (whatever the command's exit code).
 pub fn approved(r: &Response) -> bool {
-    matches!(r, Response::Error { message, .. } if message == APPROVED_NOT_RUN)
+    matches!(r, Response::RunResult(_))
 }
 
 /// The denial text, or panic.
@@ -331,4 +343,106 @@ pub fn denial(r: &Response) -> &str {
         Response::Denied { reason } => reason,
         other => panic!("expected a denial, got {other:?}"),
     }
+}
+
+/// The encodings the redactor must catch (spec 6.5), as a command would print them.
+pub mod enc {
+    pub const STD: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    pub const URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+    pub fn base64(data: &[u8], alphabet: &[u8; 64], pad: bool) -> String {
+        let mut out = String::new();
+        for chunk in data.chunks(3) {
+            let b = [
+                chunk[0],
+                chunk.get(1).copied().unwrap_or(0),
+                chunk.get(2).copied().unwrap_or(0),
+            ];
+            let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+            for i in 0..4 {
+                if i <= chunk.len() {
+                    out.push(alphabet[((n >> (18 - 6 * i)) & 63) as usize] as char);
+                } else if pad {
+                    out.push('=');
+                }
+            }
+        }
+        out
+    }
+
+    pub fn hex(data: &[u8], upper: bool) -> String {
+        data.iter()
+            .map(|b| {
+                if upper {
+                    format!("{b:02X}")
+                } else {
+                    format!("{b:02x}")
+                }
+            })
+            .collect()
+    }
+
+    pub fn url(data: &[u8], plus_for_space: bool) -> String {
+        let mut out = String::new();
+        for &b in data {
+            match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                    out.push(b as char)
+                }
+                b' ' if plus_for_space => out.push('+'),
+                _ => out.push_str(&format!("%{b:02X}")),
+            }
+        }
+        out
+    }
+
+    /// Each form on its own: base64 (3 alignments, both alphabets), hex, URL, JSON.
+    pub fn known_forms(v: &[u8]) -> Vec<String> {
+        let mut forms = Vec::new();
+        for prefix in [&b""[..], b"a", b"ab"] {
+            let data = [prefix, v].concat();
+            forms.push(base64(&data, STD, true));
+            forms.push(base64(&data, URL, false));
+        }
+        forms.push(hex(v, false));
+        forms.push(hex(v, true));
+        forms.push(url(v, true));
+        forms.push(url(v, false));
+        let json = serde_json::to_string(&String::from_utf8_lossy(v)).unwrap_or_default();
+        forms.push(json.trim_matches('"').to_owned());
+        forms
+    }
+}
+
+/// Everything `tracing` logs in this test process, for the "never in tracing output"
+/// checks. Installed once per test binary by [`capture_tracing`].
+pub fn captured_tracing() -> String {
+    String::from_utf8_lossy(&TRACE_BUF.lock().unwrap()).into_owned()
+}
+
+static TRACE_BUF: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
+
+struct TraceWriter;
+
+impl std::io::Write for TraceWriter {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        TRACE_BUF.lock().unwrap().extend_from_slice(b);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Route all `tracing` output (every level) of this test binary into a buffer.
+pub fn capture_tracing() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let sub = tracing_subscriber::fmt()
+            .with_writer(|| TraceWriter)
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .finish();
+        let _ = tracing::subscriber::set_global_default(sub);
+    });
 }

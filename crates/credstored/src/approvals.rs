@@ -8,8 +8,7 @@ use std::time::{Duration, Instant};
 use credstore_core::policy::injection_name;
 use credstore_core::vault::VaultContents;
 use credstore_proto::{
-    ErrorCode, GrantScope, Injection, PeerInfo, PendingRequest, RequestId, Response, SandboxMode,
-    SecretText,
+    ErrorCode, GrantScope, Injection, PeerInfo, PendingRequest, RequestId, Response, SecretText,
 };
 use serde_json::json;
 use tokio::sync::oneshot;
@@ -73,7 +72,7 @@ pub(crate) struct Approvals {
     grants: Vec<Grant>,
 }
 
-fn select(contents: &VaultContents, names: &[String]) -> Result<Values, String> {
+pub(crate) fn select(contents: &VaultContents, names: &[String]) -> Result<Values, String> {
     names
         .iter()
         .map(|n| {
@@ -182,7 +181,8 @@ impl State {
             cwd: prepared.cwd.to_string_lossy().into_owned(),
             secrets: prepared.secrets.clone(),
             injection: prepared.injection,
-            sandbox: SandboxMode::None,
+            sandbox: prepared.sandbox.mode,
+            sandbox_gaps: prepared.sandbox.gaps.clone(),
             network: prepared.effective.network,
             allow_hosts: prepared.effective.allow_hosts.clone(),
             max_grant_secs: prepared.effective.grant_ttl_cap_secs,

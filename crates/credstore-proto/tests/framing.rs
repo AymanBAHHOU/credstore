@@ -113,6 +113,7 @@ fn responses_round_trip() {
                 secrets: vec![],
                 injection: Injection::File,
                 sandbox: SandboxMode::JobObject,
+                sandbox_gaps: vec!["network = \"deny\" cannot be enforced".into()],
                 network: NetworkPolicy::AllowList,
                 allow_hosts: vec!["api.example.com".into()],
                 max_grant_secs: 600,

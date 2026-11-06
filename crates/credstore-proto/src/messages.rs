@@ -179,6 +179,9 @@ pub struct PendingRequest {
     pub secrets: Vec<SecretInfo>,
     pub injection: Injection,
     pub sandbox: SandboxMode,
+    /// What policy asked for that this run will not get (shown to the human).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sandbox_gaps: Vec<String>,
     pub network: NetworkPolicy,
     /// Hosts allowed when `network` is `allow-list`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

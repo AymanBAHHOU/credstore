@@ -21,6 +21,15 @@ path = "m3_policy.rs"
 name = "m4_approvals"
 path = "m4_approvals.rs"
 
+[[test]]
+name = "m5_adversarial"
+path = "m5_adversarial.rs"
+
+# A hostile command for the adversarial suite.
+[[bin]]
+name = "credstore-adversary"
+path = "adversary.rs"
+
 [dependencies]
 anyhow.workspace = true
 credstore.workspace = true
@@ -29,6 +38,8 @@ credstore-proto.workspace = true
 credstored.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread", "time"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

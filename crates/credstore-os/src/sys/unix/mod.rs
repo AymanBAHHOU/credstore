@@ -1,6 +1,8 @@
 //! Linux and macOS.
 
 pub mod ipc;
+pub mod proc;
+pub mod sandbox;
 
 use crate::{FeatureStatus, HardeningItem};
 

@@ -2,12 +2,12 @@
 
 use std::io::{BufRead, Write};
 
-use credstore_proto::SecretText;
+use credstore_proto::{NetworkPolicy, SecretText};
 
 use crate::sys::current as sys;
 use crate::{
     Endpoint, EndpointAccess, EndpointKind, HardeningItem, Ipc, MemoryGuard, Mode, OsError,
-    OsResult, Paths, PlatformPaths, Sandbox, SandboxCapabilities, SandboxPlan, SandboxSpec,
+    OsResult, Paths, PlatformPaths, Sandbox, SandboxCapabilities, SandboxNeed, SandboxPlan,
     ServiceInstall, ServiceStatus, Terminal,
 };
 
@@ -76,30 +76,17 @@ impl Ipc for Platform {
     }
 }
 
-#[cfg(target_os = "linux")]
-const SANDBOX_NAME: &str = "bubblewrap / landlock";
-#[cfg(target_os = "macos")]
-const SANDBOX_NAME: &str = "Seatbelt (sandbox-exec)";
-#[cfg(windows)]
-const SANDBOX_NAME: &str = "Job Object + restricted token";
-
 impl Sandbox for Platform {
-    fn capabilities(&self) -> OsResult<SandboxCapabilities> {
-        Err(OsError::unavailable(format!(
-            "{SANDBOX_NAME} not built yet (M5)"
-        )))
+    fn sandbox_capabilities(&self) -> &'static SandboxCapabilities {
+        crate::sandbox::capabilities()
     }
 
-    fn plan(&self, _: &[String], _: &SandboxSpec) -> OsResult<SandboxPlan> {
-        Err(OsError::unavailable(format!(
-            "{SANDBOX_NAME} not built yet (M5)"
-        )))
-    }
-
-    fn attach(&self, _: u32) -> OsResult<()> {
-        Err(OsError::unavailable(format!(
-            "{SANDBOX_NAME} not built yet (M5)"
-        )))
+    fn sandbox_plan(
+        &self,
+        need: SandboxNeed,
+        network: NetworkPolicy,
+    ) -> Result<SandboxPlan, String> {
+        crate::sandbox::plan(self.sandbox_capabilities(), need, network)
     }
 }
 
@@ -183,8 +170,9 @@ mod tests {
     #[test]
     fn unbuilt_features_report_unavailable() {
         let p = platform();
-        assert!(p.capabilities().unwrap_err().is_unavailable());
-        assert!(p.attach(1).unwrap_err().is_unavailable());
+        // The sandbox is built; on every CI OS it finds a mechanism.
+        let caps = p.sandbox_capabilities();
+        assert!(!caps.detail.is_empty());
         assert!(p.service_status().unwrap_err().is_unavailable());
         assert!(p.lock_memory(&mut [0u8; 4]).unwrap_err().is_unavailable());
     }

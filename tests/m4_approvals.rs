@@ -14,8 +14,7 @@ async fn ready(tag: &str, policy: &str) -> (TestDaemon, std::path::PathBuf) {
     d.set_secret("OTHER_KEY", "other-fake-value").await;
     d.write_policy(policy);
     assert!(matches!(d.reload().await, Response::Ok));
-    let dir = d.home.join("project");
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = d.work();
     (d, dir)
 }
 
@@ -91,13 +90,13 @@ async fn watch_shows_the_full_request_and_needs_the_passphrase() {
         "reason:   Check the API key works against the test account",
         &format!("command:  {} x", harmless_program()),
         "program:  ",
-        &format!(
-            "cwd:      {}",
-            std::fs::canonicalize(&dir).unwrap().display()
-        ),
+        &format!("cwd:      {}", dir.display()),
         "secrets:  API_KEY (test secret API_KEY)",
         "inject:   env",
-        "sandbox:  none    network: inherit",
+        &format!(
+            "sandbox:  {}    network: inherit",
+            credstore_os::sandbox::mode_name(credstore_os::sandbox::capabilities().mode)
+        ),
         &format!("pid {}", std::process::id()),
         "Wrong passphrase. The request is still pending.",
         "Type o, s or d.",

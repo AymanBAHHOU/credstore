@@ -10,10 +10,11 @@ use std::path::{Path, PathBuf};
 
 use crate::{FeatureStatus, OsError, OsResult};
 
-/// Create `dir` and its parents. On Unix the leaf is mode 0700.
+/// Create `dir` and its parents. On Unix every directory this creates is mode 0700
+/// (existing ones are left alone).
 pub fn create_private_dir(dir: &Path) -> OsResult<()> {
     if let Some(parent) = dir.parent() {
-        fs::create_dir_all(parent)?;
+        create_parents(parent)?;
     }
     match create_dir_private(dir) {
         Ok(()) => Ok(()),
@@ -65,6 +66,50 @@ pub fn write_private_atomic(path: &Path, data: &[u8]) -> OsResult<()> {
         let _ = fs::remove_file(&tmp);
     }
     result.map_err(OsError::from)
+}
+
+/// Write a secret for one run (file injection): a new file, read-only for its owner
+/// (Unix 0400; on Windows it inherits the private directory's ACL). Fails if it exists.
+pub fn write_secret_file(path: &Path, data: &[u8]) -> OsResult<()> {
+    let mut f = secret_file_options().open(path)?;
+    f.write_all(data)?;
+    Ok(())
+}
+
+/// Remove everything inside `dir` (not `dir` itself). Returns how many entries went.
+pub fn clear_dir(dir: &Path) -> OsResult<usize> {
+    let mut n = 0;
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(e.into()),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_type()?.is_dir() {
+            fs::remove_dir_all(&path)?;
+        } else {
+            fs::remove_file(&path)?;
+        }
+        n += 1;
+    }
+    Ok(n)
+}
+
+#[cfg(unix)]
+fn secret_file_options() -> OpenOptions {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut o = OpenOptions::new();
+    o.write(true).create_new(true).mode(0o400);
+    o
+}
+
+#[cfg(windows)]
+fn secret_file_options() -> OpenOptions {
+    let mut o = OpenOptions::new();
+    o.write(true).create_new(true);
+    o
 }
 
 /// Open `path` for appending, creating it owner-only (Unix 0600) if missing.
@@ -119,6 +164,15 @@ fn sweep_temp_files(dir: &Path, name: &str) {
 // ---------------------------------- Unix ----------------------------------
 
 #[cfg(unix)]
+fn create_parents(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+}
+
+#[cfg(unix)]
 fn create_dir_private(dir: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::DirBuilderExt;
     fs::DirBuilder::new().mode(0o700).create(dir)
@@ -159,9 +213,16 @@ pub fn is_owner_only(path: &Path) -> OsResult<bool> {
 
 // -------------------------------- Windows ---------------------------------
 
+/// New directories get a protected DACL (this user and SYSTEM only), which files
+/// created inside inherit.
+#[cfg(windows)]
+fn create_parents(dir: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dir)
+}
+
 #[cfg(windows)]
 fn create_dir_private(dir: &Path) -> std::io::Result<()> {
-    fs::create_dir(dir)
+    crate::sys::current::job::create_private_directory(dir)
 }
 
 #[cfg(windows)]
@@ -197,8 +258,8 @@ fn sync_dir(_: &Path) -> std::io::Result<()> {
 #[cfg(windows)]
 fn protection_status() -> FeatureStatus {
     FeatureStatus::Unavailable(
-        "explicit file ACLs are not built yet (M7); files inherit the folder's ACL \
-         (your user profile in dev mode)"
+        "partial: directories credstore creates allow only this user and SYSTEM, and \
+         files inherit that, but a directory that already existed keeps its ACL"
             .into(),
     )
 }

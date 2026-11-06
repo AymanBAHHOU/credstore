@@ -13,6 +13,7 @@ use tokio::task::JoinHandle;
 
 mod approvals;
 mod run;
+mod runner;
 mod server;
 mod state;
 
@@ -40,6 +41,13 @@ pub async fn start(config: DaemonConfig) -> anyhow::Result<RunningDaemon> {
     // A missing or invalid policy does not stop the daemon: runs are denied until
     // `credstore reload` (or SIGHUP) loads a valid one.
     let _ = state.load_policy("startup");
+    state.sweep_run_dir();
+    let caps = credstore_os::sandbox::capabilities();
+    tracing::info!(
+        sandbox = credstore_os::sandbox::mode_name(caps.mode),
+        detail = %caps.detail,
+        "sandbox probed"
+    );
 
     let (agent, approver) = server::bind_all(&state)
         .await
