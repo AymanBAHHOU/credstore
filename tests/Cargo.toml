@@ -25,6 +25,10 @@ path = "m4_approvals.rs"
 name = "m5_adversarial"
 path = "m5_adversarial.rs"
 
+[[test]]
+name = "m7_installed"
+path = "m7_installed.rs"
+
 # A hostile command for the adversarial suite.
 [[bin]]
 name = "credstore-adversary"

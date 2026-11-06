@@ -5,5 +5,6 @@
 
 pub mod client;
 pub mod commands;
+pub mod doctor;
 pub mod mcp;
 pub mod watch;

@@ -104,7 +104,7 @@ impl MemoryGuard for Platform {
 
 impl ServiceInstall for Platform {
     fn service_status(&self) -> OsResult<ServiceStatus> {
-        Err(OsError::unavailable("service install not built yet (M7)"))
+        crate::service::status()
     }
 }
 
@@ -168,12 +168,16 @@ mod tests {
     }
 
     #[test]
-    fn unbuilt_features_report_unavailable() {
+    fn features_report_honestly() {
         let p = platform();
         // The sandbox is built; on every CI OS it finds a mechanism.
         let caps = p.sandbox_capabilities();
         assert!(!caps.detail.is_empty());
-        assert!(p.service_status().unwrap_err().is_unavailable());
+        // Service status answers (normally "not installed" here), or says why it cannot.
+        match p.service_status() {
+            Ok(_) => {}
+            Err(e) => assert!(e.is_unavailable(), "{e}"),
+        }
         assert!(p.lock_memory(&mut [0u8; 4]).unwrap_err().is_unavailable());
     }
 }

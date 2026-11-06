@@ -134,13 +134,12 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
         },
         Command::Watch => credstore::watch::watch(&client, &prompt, &mut out).await,
         Command::Mcp => credstore::mcp::serve(client).await,
-        Command::Doctor => not_built("M7"),
+        Command::Doctor => {
+            let report = credstore::doctor::doctor(&client, &prompt, &mut out).await?;
+            return Ok(i32::from(report.failures() > 0));
+        }
     };
     done.map(|()| 0)
-}
-
-fn not_built(milestone: &str) -> anyhow::Result<()> {
-    anyhow::bail!("this command is not built yet ({milestone})")
 }
 
 /// Reads hidden input from the controlling terminal, never from stdin.

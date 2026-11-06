@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Creates /var/run/credstore (owned by _credstore, mode 0755) at boot. macOS clears
+  /var/run when it starts, and the daemon runs as _credstore, which cannot create
+  directories there itself. Not in the spec; see docs/DESIGN.md.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.credstore.rundir</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/install</string>
+        <string>-d</string>
+        <string>-o</string>
+        <string>_credstore</string>
+        <string>-g</string>
+        <string>_credstore</string>
+        <string>-m</string>
+        <string>0755</string>
+        <string>/var/run/credstore</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>LaunchOnlyOnce</key>
+    <true/>
+</dict>
+</plist>

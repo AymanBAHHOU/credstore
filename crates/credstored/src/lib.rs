@@ -128,6 +128,26 @@ impl RunningDaemon {
         let _ = self.state.audit("daemon_stopped", None, json!({}));
     }
 
+    /// Record what process hardening applied, for `credstore status` and `doctor`.
+    pub fn report_hardening(&self, items: &[credstore_os::HardeningItem]) {
+        let reports = items
+            .iter()
+            .map(|i| credstore_proto::HardeningReport {
+                name: i.name.to_string(),
+                active: i.status == credstore_os::FeatureStatus::Active,
+                detail: match &i.status {
+                    credstore_os::FeatureStatus::Active => None,
+                    credstore_os::FeatureStatus::Unavailable(why) => Some(why.clone()),
+                },
+            })
+            .collect();
+        *self
+            .state
+            .hardening
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = reports;
+    }
+
     /// Whether the vault is currently unlocked in memory.
     pub fn is_unlocked(&self) -> bool {
         self.state.is_unlocked()

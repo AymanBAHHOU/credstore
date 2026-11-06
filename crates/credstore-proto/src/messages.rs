@@ -234,6 +234,28 @@ pub struct StatusInfo {
     /// Why the policy could not be loaded. While set, every run request is denied.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_error: Option<String>,
+    /// Daemon process id (for `doctor`'s memory check).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Sandbox the daemon found: mode and a human-readable summary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<String>,
+    /// Memory hardening the daemon applied at startup.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hardening: Vec<HardeningReport>,
+}
+
+/// One memory hardening feature and whether it is active in the daemon.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HardeningReport {
+    pub name: String,
+    pub active: bool,
+    /// Why it is not (fully) active.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

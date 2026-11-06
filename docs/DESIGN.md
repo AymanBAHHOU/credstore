@@ -162,7 +162,11 @@ These settle gaps in the spec. They were confirmed by the human, not guessed.
   not depend on serde_json map ordering. Each record is fsynced. On open, the chain
   continues from the last complete record; a partial last line (crash) is left in place
   and reported by `verify`. Trailing records removed from the end can't be detected by
-  the chain alone; the append-only attribute (installed mode, M7) covers that.
+  the chain alone. In installed mode only root (or Administrators) and the service
+  account can write the log. Not done: an append-only attribute (`chattr +a`,
+  `chflags sappnd`); systemd's `LogsDirectory=` ownership fix-up cannot chown such a
+  file, and Windows has no equivalent that also stops the directory's delete-child
+  right. So truncating the tail needs root or the daemon's own account.
 - **Extra audit events** (not in spec 5.3): `auth_failed` (wrong passphrase, with
   peer), `daemon_started`, `daemon_stopped`. Connections are logged with `tracing`
   (uid/sid, pid, exe) rather than as audit records, to keep the audit log to decisions.
@@ -202,7 +206,8 @@ These settle gaps in the spec. They were confirmed by the human, not guessed.
   the policy error; `credstore reload` returns it. A failed reload replaces the old
   policy with "deny everything" rather than keeping it.
 - **Starter policy:** in dev mode, `init` writes one (defaults only, plus a commented
-  example) if none exists. Installed mode: the installer writes it (M7).
+  example) if none exists. Installed mode: the installer writes the same text
+  (`deploy/policy.toml`) and keeps an existing policy.
 - **Reload:** `credstore reload` everywhere; SIGHUP on Linux and macOS. Each attempt is
   audited as `config_reloaded` with `trigger` (`startup`, `init`, `request`, `signal`),
   `ok` and `error`.
@@ -428,21 +433,105 @@ memory in dev mode.
   here:** a session with Claude Code itself (registering the server changes the user's
   Claude Code config, which these sessions do not do).
 
+## Install, service and `doctor` (M7)
+
+**Files** (`deploy/`): `credstored.service`, `sysusers.conf`, `install.sh` (Linux and
+macOS), `dev.credstore.daemon.plist` and `dev.credstore.rundir.plist` (macOS),
+`install.ps1` (Windows), and `policy.toml`, the starter policy. `STARTER_POLICY` in
+`credstore-core` is `include_str!` of that file, so dev mode and the installers write the
+same text.
+
+**Accounts and permissions.**
+
+- The service account is a **member of both groups** (`m` lines in `sysusers.conf`,
+  `dseditgroup` on macOS). Without that it cannot `chgrp` its sockets to them. Membership
+  grants it nothing else.
+- Socket directory: 0755, owned by the service account (systemd `RuntimeDirectory`, the
+  macOS rundir job). The sockets are 0660 with the group; the daemon refuses a socket
+  directory it does not own or that others can write.
+- Data and log directories: 0700, service account. Policy: `root:<service group>` 0640
+  in a 0750 directory, so the daemon can read it and nobody else but root. Windows:
+  `%ProgramData%\credstore` with inheritance cut and full control for SYSTEM,
+  Administrators and `NT SERVICE\credstore` only.
+- So in installed mode `credstore audit` needs `sudo` (or an elevated shell) to read the
+  log. The CLI reads the file directly; routing the audit log through the daemon would
+  mean an approver op that streams it, which can come later.
+
+**Deviations from spec 8 / 8.1:**
+
+- `RestrictAddressFamilies` adds **`AF_NETLINK`**: bubblewrap configures loopback in a
+  run's new network namespace over netlink, so without it `network = "deny"` runs fail.
+- **macOS needs a second launchd job**, `dev.credstore.rundir`, run as root at boot to
+  create `/var/run/credstore`: macOS clears `/var/run` at boot and `_credstore` cannot
+  create directories there. The daemon job has `KeepAlive`, so if it starts first it
+  exits and is restarted 10 s later.
+- **Windows service creation** uses `New-Service` and then
+  `sc.exe config credstore obj= "NT SERVICE\credstore"` (plus `sidtype unrestricted`)
+  instead of a single `sc.exe create ... obj=`: passing a quoted `binPath` with spaces to
+  `sc.exe` is parsed differently by Windows PowerShell 5.1 and PowerShell 7. Same result.
+- `credstored --service` (Windows only) runs the daemon under the Service Control
+  Manager (`credstore-os::service`, `sys/windows/service.rs`) and logs to
+  `credstored.log` in the data directory; a stop or shutdown request shuts it down
+  cleanly. systemd and launchd run it as a plain process and stop it with SIGTERM.
+- `install.sh` also takes `--uninstall` and `install.ps1` `-Uninstall`: they remove the
+  service and binaries and keep the data, users and groups.
+
+**Commands run under the unit's restrictions** (they are children of the daemon):
+`ProtectHome=yes` hides `/home`, `ProtectSystem=strict` makes the rest read-only, and
+`MemoryDenyWriteExecute=yes` breaks JIT runtimes. The README documents a drop-in to relax
+these per machine rather than weakening the shipped unit.
+
+**`credstore doctor`** (`crates/credstore/src/doctor.rs`), run as the agent's user:
+
+- mode (dev is always a warning); service status (`systemctl`, `launchctl print`,
+  `sc.exe query`); membership in both groups, active in this session (Linux
+  `getgroups`, Windows `CheckTokenMembership`) or only listed (log out and back in);
+- installed mode: tries to open the data dir, vault, index and policy for reading, and
+  the files for appending (nothing is written). Any success is a **FAIL**; the audit log
+  being readable is a warning, writable a failure. Dev mode instead checks the files are
+  owner-only (Unix mode bits; Windows DACL read as SDDL, see `fs::is_owner_only`);
+- both endpoints, each through the client's daemon identity check, and `list_secrets`;
+- the daemon's memory: the client learns the daemon's PID from the connection (peer
+  credentials on Unix, `GetNamedPipeServerProcessId` on Windows) and tries to open it
+  for reading (`probe::process_memory_access`). Readable is a FAIL in installed mode;
+- with the passphrase (only if there is a terminal): the daemon's own report from
+  `status`: policy load error, sandbox mode and detail, and each hardening feature with
+  whether it is active. Without it, doctor says so and shows this process's sandbox
+  probe, labelled as such. A Job Object sandbox is a warning (no file or network
+  isolation), `none` too;
+- Claude Code settings (`~/.claude/settings.json`, `./.claude/settings*.json`): a
+  warning if a `permissions.allow` rule names `mcp__credstore`;
+- privileged accounts (root, elevated administrator, enabled `SeDebugPrivilege`) get a
+  warning, and file and memory findings become warnings, since they show what that
+  account can reach, not the agent.
+
+Exit code 1 if anything failed.
+
+**Tested** by `crates/credstore/tests/doctor_dev.rs` (dev daemon: with and without the
+passphrase, wrong passphrase) and by the installed-mode smoke test
+`tests/m7_installed.rs`, which CI runs after the real installers (see CI). It inits the
+vault, adds the fake secret, runs an approved command through the agent endpoint as the
+service, checks the redacted output, and requires `doctor` to report no failures: the
+vault, index and policy unreadable by the test user, the service running, both groups
+active, the memory closed (or not checkable on macOS), and a sandbox and hardening report
+from the daemon.
+
 ## Stubbed per OS
 
 | Capability      | Linux                 | macOS                 | Windows               |
 | --------------- | --------------------- | --------------------- | --------------------- |
 | Paths           | done                  | done                  | done                  |
-| Private files   | done (0600/0700)      | done (0600/0700)      | done for dirs credstore creates (protected DACL); ACL check stub, M7 |
+| Private files   | done (0600/0700)      | done (0600/0700)      | done for dirs credstore creates (protected DACL); owner-only check reads the DACL |
 | Atomic replace  | done                  | done                  | done                  |
 | Terminal prompt | done (`rpassword`)    | done (`rpassword`)    | done (`rpassword`)    |
 | IPC             | done (Unix socket)    | done (Unix socket), CI only | done (named pipe) |
 | Peer identity   | done (uid, pid, exe)  | done (uid, pid; no exe) | done (SID, pid, exe) |
-| Group check     | done, untested (needs install) | done, untested | done, untested |
+| Group check     | done (CI install job) | done (CI install job) | done (CI install job) |
 | Memory guard    | dumpable, core limit; no mlock | deny-attach, core limit; no mlock | DACL; WER partial; no VirtualLock |
 | Runner          | done (session + killpg) | done (session + killpg), CI only | done (suspended start + Job Object) |
 | Sandbox         | done (bwrap, Landlock) | done (Seatbelt), CI only | Job Object only (no file hiding, no network deny) |
-| Service install | stub, M7              | stub, M7              | stub, M7              |
+| Service install | systemd unit + `install.sh` (CI) | launchd + `install.sh` (CI) | SCM service + `install.ps1` (CI) |
+| `doctor`        | done                  | done (no memory probe) | done                  |
 
 Stubs return `OsError::Unavailable("<mechanism> not built yet (Mx)")`; the daemon logs
 each unavailable hardening feature at startup.
@@ -473,3 +562,13 @@ real terminal is not, since CI has none.
 on `windows-latest`, `ubuntu-latest` and `macos-latest`. On Ubuntu it installs
 bubblewrap and allows unprivileged user namespaces, then runs the adversarial suite
 twice more: with `CREDSTORE_FORCE_SANDBOX=landlock` (Linux) and `=none` (every OS).
+
+The `installed` job (one per OS) builds release binaries, runs the real installer, and
+runs `tests/m7_installed.rs` (`--ignored`) against the installed service, then
+uninstalls. On Linux and macOS the test runs through `sudo -u $USER`, which picks up
+the groups the installer just added. On Windows group membership only reaches a token
+at logon, so the job creates a throwaway local user (random password, that runner
+only), installs with `-User` set to it, and starts the test as that user with
+`Start-Process -Credential`. Commands approved there run in `/opt/credstore-smoke`
+(Linux; `ProtectHome` hides the checkout), `/usr/local/credstore-smoke` (macOS) or
+`C:\credstore-smoke` (Windows, with an ACL for the service).

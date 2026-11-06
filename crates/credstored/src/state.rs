@@ -39,6 +39,8 @@ pub(crate) struct State {
     pub(crate) pending_version: tokio::sync::watch::Sender<u64>,
     /// Commands running now. The idle relock waits for them.
     pub(crate) active_runs: std::sync::atomic::AtomicUsize,
+    /// What `harden_process` applied (set by the binary; empty in tests).
+    pub(crate) hardening: Mutex<Vec<credstore_proto::HardeningReport>>,
 }
 
 /// With `session_idle_secs = 0` the runner relocks right after each run; the background
@@ -128,6 +130,7 @@ impl State {
             approvals: Mutex::new(Approvals::default()),
             pending_version: tokio::sync::watch::channel(0).0,
             active_runs: std::sync::atomic::AtomicUsize::new(0),
+            hardening: Mutex::new(Vec::new()),
         }
     }
 
@@ -325,6 +328,17 @@ impl State {
                 dev_mode: self.mode() == Mode::Dev,
                 pending: u32::try_from(self.pending_count()).unwrap_or(u32::MAX),
                 policy_error: self.policy().err(),
+                pid: Some(std::process::id()),
+                version: Some(env!("CARGO_PKG_VERSION").into()),
+                sandbox: Some({
+                    let c = credstore_os::sandbox::capabilities();
+                    format!("{}: {}", credstore_os::sandbox::mode_name(c.mode), c.detail)
+                }),
+                hardening: self
+                    .hardening
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .clone(),
             }),
             ApproverOp::AdminSet {
                 name,

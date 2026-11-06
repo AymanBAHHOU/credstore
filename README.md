@@ -1,0 +1,253 @@
+# credstore
+
+A local secret broker that lets coding agents (Claude Code and similar) **use** secrets
+without **seeing** them.
+
+The agent asks: "run `pytest tests/billing` with `STRIPE_KEY`, because I need to test
+the webhook". You see exactly that request in `credstore watch` and approve it with your
+vault passphrase. The command runs with the secret injected, and the agent gets back only
+the output, with the value redacted. No tool, flag or endpoint returns a secret value.
+
+Windows, Linux (including WSL2) and macOS, one Rust codebase. Everything runs locally.
+The full design is in [SPEC.md](SPEC.md); where the code differs from it, and why, is in
+[docs/DESIGN.md](docs/DESIGN.md).
+
+```
+ your user (untrusted)                        credstore user (trusted)
+ ┌──────────────────────┐   agent endpoint   ┌──────────────────────────────┐
+ │ Claude Code          │                    │ credstored                   │
+ │   └ credstore mcp ───┼───────────────────►│  policy, approvals, vault,   │
+ │     (holds nothing)  │                    │  sandboxed runner, redaction,│
+ │ credstore watch  ────┼───────────────────►│  hash-chained audit log      │
+ │   (your terminal)    │ approver endpoint  └──────────────────────────────┘
+ └──────────────────────┘  (passphrase on every request)
+```
+
+## Install
+
+Build first (Rust stable):
+
+```bash
+cargo build --release
+```
+
+**Linux** (systemd; on WSL2 set `systemd=true` under `[boot]` in `/etc/wsl.conf` first)
+and **macOS**:
+
+```bash
+sudo ./deploy/install.sh
+```
+
+**Windows**, from an elevated PowerShell:
+
+```powershell
+.\deploy\install.ps1
+```
+
+The installers create the service account (`credstore`, `_credstore` on macOS,
+`NT SERVICE\credstore` on Windows) and the groups `credstore-agents` and
+`credstore-approvers`, and add you to both. They also set up the directories with the
+permissions below, write a starter policy, and start the service. They are safe to
+re-run. `--uninstall` / `-Uninstall` removes the service and binaries but keeps the
+vault, policy and audit log.
+
+Then **log out and back in** so the new groups apply, and:
+
+```bash
+credstore init            # create the vault, set the passphrase (asked twice)
+credstore set STRIPE_KEY  # the value is prompted for, never taken from argv
+credstore doctor          # check the install
+```
+
+| Item     | Linux / WSL2                     | macOS                             | Windows                               |
+| -------- | -------------------------------- | --------------------------------- | ------------------------------------- |
+| Vault    | `/var/lib/credstore/`            | `/var/db/credstore/`              | `%ProgramData%\credstore\`            |
+| Policy   | `/etc/credstore/policy.toml`     | `/etc/credstore/policy.toml`      | `%ProgramData%\credstore\policy.toml` |
+| Audit    | `/var/log/credstore/audit.jsonl` | `/var/log/credstore/audit.jsonl`  | `%ProgramData%\credstore\audit.jsonl` |
+| Sockets  | `/run/credstore/*.sock`          | `/var/run/credstore/*.sock`       | `\\.\pipe\credstore-{agent,approver}` |
+
+Your account cannot read any of these. Editing the policy and reading the audit log need
+`sudo` (or an elevated shell on Windows). `credstore reload` applies policy edits.
+
+### Dev mode (no install)
+
+`credstored --dev` runs the daemon as you, with everything under `~/.credstore`. Use
+`credstore --dev ...` with it. **Dev mode is weaker**: the agent runs as you too, so it
+can read the (encrypted) vault file and the daemon's memory. It is for development and
+trying credstore out, not for real secrets.
+
+### Installed mode: where commands run
+
+Approved commands run as the **service account**, not as you. They do not see your home
+directory's config (ssh keys, git config), and they need access to the project folders
+they run in:
+
+- **Linux.** The unit uses `ProtectHome=yes` and `ProtectSystem=strict` (spec 8), which
+  hide `/home` and make the system read-only for the daemon and its commands. To run in
+  projects under `/home`, add a drop-in with `sudo systemctl edit credstored`:
+
+  ```ini
+  [Service]
+  ProtectHome=no
+  ReadWritePaths=/home/you/projects
+  ```
+
+  and give the account access: `setfacl -R -m u:credstore:rwX /home/you/projects` (and
+  `setfacl -m u:credstore:x /home/you` to let it reach the folder).
+  The unit also sets `MemoryDenyWriteExecute=yes`, which the commands inherit: JIT
+  runtimes (Node.js, Java, some Python builds) fail under it. Turn it off in the same
+  drop-in (`MemoryDenyWriteExecute=no`) if you need them.
+- **macOS**: `chmod +a "_credstore allow list,search,readattr,read,write,add_file,add_subdirectory,file_inherit,directory_inherit" ~/projects/app`
+- **Windows**: `icacls C:\path\to\project /grant "NT SERVICE\credstore:(OI)(CI)M"`
+
+## Use with Claude Code
+
+```bash
+claude mcp add credstore -- credstore mcp
+```
+
+(`credstore --dev mcp` for dev mode.) This gives the agent two tools:
+
+- `list_secrets`: names and descriptions only.
+- `run_with_secrets`: argv (or a shell string, if policy allows it), the secret names, a
+  reason of 10 to 300 characters, an optional cwd, timeout and injection mode (`env`,
+  `file` or `stdin`). The call blocks until you decide in `credstore watch`.
+
+Keep `credstore watch` open in a terminal. It shows the full request (command, folder,
+secrets, reason, sandbox and anything **not** enforced) and asks for your passphrase to
+approve once or for a session. Piped input cannot approve.
+
+**Do not allowlist** credstore's tools in Claude Code, so Claude Code asks you too.
+`doctor` warns if they are. **Add deny rules** so the agent cannot read secrets that are
+still lying around, or credstore's files. For example, in `~/.claude/settings.json`:
+
+```json
+{
+  "permissions": {
+    "deny": [
+      "Read(**/.env*)",
+      "Read(//var/lib/credstore/**)",
+      "Read(//etc/credstore/**)",
+      "Read(~/.credstore/**)"
+    ]
+  }
+}
+```
+
+In Claude Code rules `//` starts an absolute path and `~/` your home. On macOS use
+`//var/db/credstore/**`; on Windows `//c/ProgramData/credstore/**` and `~/.credstore/**`.
+Check Claude Code's permissions documentation if your version writes paths differently.
+
+You can also run a command yourself: `credstore run -s STRIPE_KEY -- stripe listen`. The
+passphrase you type is the approval, and policy still applies.
+
+## Policy
+
+[deploy/policy.toml](deploy/policy.toml) is the starter policy. Any secret without its
+own block uses `[defaults]`, which allows any command but always asks you. A stricter
+example:
+
+```toml
+[defaults]
+require_approval = true
+max_runtime_secs = 120
+max_output_bytes = 20000
+sandbox = "require"        # deny if the sandbox cannot enforce everything below
+network = "deny"
+strict = true              # deny secrets that have no [secret.NAME] block
+
+[secret.STRIPE_KEY]
+allow_commands = ["stripe *", "pytest *"]
+allow_dirs     = ["/home/you/projects/billing/**"]
+grant_ttl_secs = 600       # "approve for this session" lasts at most 10 minutes
+injection      = ["env"]
+
+[secret.PROD_DB_URL]
+grant_ttl_secs = 0         # approve every single use
+```
+
+A request that breaks the policy is denied before you are asked. Shell mode (`sh -c`,
+`cmd /c`, `powershell -Command`) is denied unless `allow_shell = true`. On Windows, write
+`allow_dirs` as `C:/Users/...`.
+
+## Threat model
+
+| Actor                                | Can                                                       | credstore prevents                                                   |
+| ------------------------------------ | --------------------------------------------------------- | -------------------------------------------------------------------- |
+| Prompt-injected or misbehaving agent | run commands as your user, read your files, call MCP tools | reading values or the vault, approving its own requests, values in output |
+| Other processes of your user         | the same                                                  | the same                                                             |
+| Thief of the vault file              | has the encrypted file                                    | decrypting it without the passphrase (age, scrypt)                   |
+| Reader of logs and transcripts       | reads the audit log and MCP transcripts                   | finding values anywhere                                              |
+
+How:
+
+- **A separate OS account.** The daemon, the vault and its memory belong to the service
+  account, which your account (and so the agent) cannot read.
+- **Approval needs something the agent does not have**: the vault passphrase, typed on a
+  real terminal, checked by the daemon on every approver request. A connection alone
+  grants nothing.
+- **Policy, sandbox and a cleared environment** limit what an approved command can do;
+  every gap is shown on the approval screen and in the audit log.
+- **Redaction** of every output (exact value, line by line, URL, hex, JSON and base64
+  forms) is a safety net, not the control.
+- **A hash-chained audit log** of every request, decision and run;
+  `credstore audit verify` finds a tampered or removed line.
+
+## What this does not protect against
+
+- **An approved command that leaks the secret on purpose.** It can encode it in a way
+  redaction does not catch (reversed, split, compressed, encrypted), write it to a file
+  the agent can read, or send it over the network. **You** are the control: read the
+  command before approving. Restricting commands and folders in the policy, and
+  `network = "deny"`, narrow it.
+- **Network allow-lists are not enforced in v1.** `network = "allow-list"` and
+  `allow_hosts` need the v2 auth proxy; with `sandbox = "require"` such runs are denied,
+  with `prefer` they run with full network access and the approval screen says so.
+- **Windows sandboxing is weak.** A Job Object bounds the process tree, its processes
+  and its memory. It hides no files and cannot block the network, so `network = "deny"`
+  with `sandbox = "require"` is always denied on Windows (AppContainer is planned for v2).
+- **Root, administrators, and anyone with debug privileges.** They can read any
+  process's memory and any file. An agent running as an administrator (elevated, or with
+  `SeDebugPrivilege` enabled) defeats the separate account. Run your agent as a normal
+  user. `doctor` warns when it runs privileged.
+- **A compromised OS or malware running as root** (spec non-goal).
+- **Dev mode**, by design (see above).
+- **Shoulder-surfing your passphrase**, or a keylogger in your session.
+- **Over-broad secrets.** Use scoped, low-privilege keys where the provider has them.
+- **Keys in memory are not locked.** The daemon disables core dumps and debugger attach
+  where the OS allows it, but does not `mlock` / `VirtualLock` the vault, so it can reach
+  swap. `doctor` lists what is active.
+- **Commands that outlive the run** by leaving its process group (`setsid`) survive the
+  kill under Landlock or no sandbox; bubblewrap and Windows Job Objects catch them.
+
+## `credstore doctor`
+
+Run it as the account your agent uses. It checks the service, your group membership,
+that your account **cannot** read or write the vault, index or policy (it fails loudly
+if it can), that both endpoints answer as the real daemon, and whether your account can
+open the daemon's memory. With your passphrase, it shows the daemon's sandbox and each
+memory hardening feature, active or not. It also warns if Claude Code allowlists
+credstore's tools. It exits non-zero if anything failed.
+
+## Status
+
+All seven milestones in [SPEC.md](SPEC.md) are built. CI runs on Windows, Linux and
+macOS: the unit and integration tests, the adversarial suite (spec 10) with each sandbox
+and with none, an MCP session against the real binary, and the installers on fresh
+runners, driving the installed service as a member of the groups (run, redaction,
+`doctor`), then uninstalling.
+
+Not verified:
+
+- A session with Claude Code itself. The MCP shim is tested over stdio the way Claude
+  Code drives it, but registering it changes Claude Code's configuration, which these
+  sessions did not do.
+- WSL2 with systemd, and macOS, on a real machine: CI covers Ubuntu and macOS runners,
+  and WSL2 was used only in dev mode.
+- `credstore watch` and the passphrase prompt on a real terminal (CI has none; piped
+  input is tested to be refused).
+
+Open questions use the spec's defaults (section 12): no phone approval in v1; Windows
+sandbox is a Job Object (no restricted token, see docs/DESIGN.md); Windows and WSL
+installs are independent; no per-secret usage limits; only `once` and `session`
+approvals, never "always".

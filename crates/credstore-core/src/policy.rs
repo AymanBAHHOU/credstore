@@ -13,29 +13,7 @@ use serde::Deserialize;
 use crate::names;
 
 /// Starter policy written for a new dev-mode vault and by the installers.
-pub const STARTER_POLICY: &str = r#"# credstore policy. See SPEC.md section 5.2.
-# Reload with `credstore reload` (or SIGHUP on Linux/macOS) after editing.
-
-[defaults]
-require_approval = true
-max_runtime_secs = 120
-max_output_bytes = 20000
-sandbox = "prefer"          # "require" | "prefer" | "off"
-network = "inherit"         # "inherit" | "deny" | "allow-list"
-grant_ttl_secs = 600        # longest "approve for this session" allowed
-session_idle_secs = 600     # relock the vault after this long unused (0 = after each run)
-approval_timeout_secs = 120
-# strict = true             # deny secrets that have no [secret.NAME] block
-
-# Example: restrict a secret to some commands and a project folder.
-# [secret.STRIPE_KEY]
-# allow_commands = ["curl *api.stripe.com*", "stripe *", "pytest *"]
-# allow_dirs     = ["/home/me/projects/billing/**"]
-# network        = "allow-list"
-# allow_hosts    = ["api.stripe.com"]
-# grant_ttl_secs = 600
-# injection      = ["env"]
-"#;
+pub const STARTER_POLICY: &str = include_str!("../../../deploy/policy.toml");
 
 /// Upper bounds on numeric settings.
 const MAX_RUNTIME_CAP: u64 = 24 * 3600;

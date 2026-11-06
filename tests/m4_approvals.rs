@@ -340,7 +340,8 @@ async fn idle_relock_follows_the_policy() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn agent_endpoint_cannot_subscribe_or_approve() {
-    let (d, dir) = ready("m4agent", "[defaults]\napproval_timeout_secs = 3\n").await;
+    // Long enough that the scrypt-backed approver calls below fit under a loaded test run.
+    let (d, dir) = ready("m4agent", "[defaults]\napproval_timeout_secs = 10\n").await;
     let (r, ()) = tokio::join!(d.run(req(&dir, "API_KEY")), async {
         d.wait_pending(1).await;
         let id = d.pending().await.pop().unwrap().id;

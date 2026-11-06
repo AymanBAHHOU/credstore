@@ -50,3 +50,87 @@ jobs:
         with:
           tool: cargo-deny
       - run: cargo deny check
+
+  # M7: install the real service with the real installer, then drive it as a member of
+  # the credstore groups (tests/m7_installed.rs).
+  installed:
+    name: installed-${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: installed
+      - name: Install bubblewrap (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Build
+        shell: bash
+        run: |
+          cargo build --release -p credstore -p credstored
+          cargo build -p credstore-tests --bin credstore-adversary
+          cargo test -p credstore-tests --test m7_installed --no-run --message-format=json \
+            | jq -r 'select(.profile.test == true and .target.name == "m7_installed") | .executable' \
+            > smoke-test-path.txt
+          cat smoke-test-path.txt
+
+      - name: Install and smoke test (Linux, macOS)
+        if: runner.os != 'Windows'
+        run: |
+          sudo bash ./deploy/install.sh --user "$USER"
+          if [ "$RUNNER_OS" = Linux ]; then smoke=/opt/credstore-smoke; else smoke=/usr/local/credstore-smoke; fi
+          sudo install -d -m 0755 "$smoke"
+          sudo install -m 0755 target/debug/credstore-adversary "$smoke/"
+          # sudo re-reads group membership, so the new groups apply.
+          sudo -u "$USER" env CREDSTORE_SMOKE_DIR="$smoke" "$(cat smoke-test-path.txt)" --ignored --nocapture
+      - name: Service log (Linux, macOS)
+        if: failure() && runner.os != 'Windows'
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then sudo journalctl -u credstored.service --no-pager -n 200; else sudo cat /var/log/credstore/credstored.log; fi
+      - name: Uninstall (Linux, macOS)
+        if: runner.os != 'Windows'
+        run: |
+          sudo bash ./deploy/install.sh --uninstall
+          ! test -e /usr/local/bin/credstored
+
+      - name: Install and smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          # Group membership reaches a token only at logon, so the test runs as a fresh
+          # local user (random password, this runner only) added by the installer.
+          $pw = ConvertTo-SecureString ("Cs1!" + [guid]::NewGuid().ToString('N')) -AsPlainText -Force
+          New-LocalUser -Name cssmoke -Password $pw -PasswordNeverExpires | Out-Null
+          .\deploy\install.ps1 -User "$env:COMPUTERNAME\cssmoke"
+          $smoke = 'C:\credstore-smoke'
+          New-Item -ItemType Directory -Force $smoke | Out-Null
+          Copy-Item target\debug\credstore-adversary.exe, (Get-Content smoke-test-path.txt) $smoke
+          icacls $smoke /grant 'NT SERVICE\credstore:(OI)(CI)RX' /grant 'cssmoke:(OI)(CI)M' | Out-Null
+          $test = Join-Path $smoke (Split-Path -Leaf (Get-Content smoke-test-path.txt))
+          Start-Service seclogon -ErrorAction SilentlyContinue
+          $cred = New-Object System.Management.Automation.PSCredential("$env:COMPUTERNAME\cssmoke", $pw)
+          $p = Start-Process -FilePath $test -ArgumentList '--ignored', '--nocapture' `
+            -Credential $cred -LoadUserProfile -WorkingDirectory $smoke -Wait -PassThru `
+            -RedirectStandardOutput "$smoke\out.txt" -RedirectStandardError "$smoke\err.txt"
+          Get-Content "$smoke\out.txt", "$smoke\err.txt"
+          if ($p.ExitCode -ne 0) { throw "smoke test failed ($($p.ExitCode))" }
+      - name: Service log (Windows)
+        if: failure() && runner.os == 'Windows'
+        shell: powershell
+        run: |
+          Get-Service credstore -ErrorAction SilentlyContinue | Format-List *
+          Get-Content "$env:ProgramData\credstore\credstored.log" -ErrorAction SilentlyContinue
+      - name: Uninstall (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          .\deploy\install.ps1 -Uninstall
+          if (Get-Service credstore -ErrorAction SilentlyContinue) { throw 'service still there' }

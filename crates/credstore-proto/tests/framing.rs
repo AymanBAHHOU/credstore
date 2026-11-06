@@ -130,6 +130,14 @@ fn responses_round_trip() {
             dev_mode: true,
             pending: 0,
             policy_error: Some("bad policy".into()),
+            pid: Some(42),
+            version: Some("0.1.0".into()),
+            sandbox: Some("bwrap: bubblewrap at /usr/bin/bwrap".into()),
+            hardening: vec![credstore_proto::HardeningReport {
+                name: "mlock".into(),
+                active: false,
+                detail: Some("not applied".into()),
+            }],
         }),
         Response::Ok,
         Response::Error {

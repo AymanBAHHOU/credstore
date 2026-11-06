@@ -20,6 +20,7 @@ mod platform;
 pub mod probe;
 pub mod run;
 pub mod sandbox;
+pub mod service;
 pub mod signals;
 mod sys;
 

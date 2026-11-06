@@ -1,0 +1,49 @@
+# credstore daemon (spec 8). Installed by deploy/install.sh to
+# /etc/systemd/system/credstored.service.
+#
+# Commands approved through credstore run as the `credstore` user inside this unit, so
+# they see the filesystem the way this unit does: ProtectHome=yes hides /home, /root and
+# /run/user, and ProtectSystem=strict makes everything outside ReadWritePaths read-only.
+# To run commands in projects under /home, add a drop-in (see README "Installed mode on
+# Linux") rather than editing this file.
+[Unit]
+Description=credstore secret broker
+Documentation=https://github.com/AymanBAHHOU/credstore
+After=local-fs.target network.target
+
+[Service]
+Type=simple
+User=credstore
+Group=credstore
+ExecStart=/usr/local/bin/credstored
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=2s
+
+# /run/credstore holds the sockets (0660, groups credstore-agents / credstore-approvers);
+# the directory itself is 0755 so group members can reach them.
+RuntimeDirectory=credstore
+RuntimeDirectoryMode=0755
+StateDirectory=credstore
+StateDirectoryMode=0700
+LogsDirectory=credstore
+LogsDirectoryMode=0700
+UMask=0077
+
+# Hardening from spec 8.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/credstore /var/log/credstore /run/credstore
+# AF_NETLINK is not in the spec's list: bubblewrap needs it to bring up loopback in the
+# network namespace of a run with network = "deny" (docs/DESIGN.md).
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+CapabilityBoundingSet=
+LimitCORE=0
+# Inherited by the commands credstore runs: JIT runtimes (node, java, some python
+# builds) fail under it. See README before removing it.
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target

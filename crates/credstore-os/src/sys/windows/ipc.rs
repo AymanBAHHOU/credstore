@@ -129,6 +129,7 @@ pub async fn connect(endpoint: &Endpoint, mode: Mode) -> OsResult<PipeStream> {
         }
     };
     let owner = win::handle_owner_sid(client.as_raw_handle() as HANDLE)?;
+    let server_pid = win::pipe_server_pid(client.as_raw_handle() as HANDLE).ok();
     let expected = match mode {
         Mode::Dev => win::current_user_sid()?,
         Mode::Installed => win::lookup_account_sid(SERVICE_USER)
@@ -147,6 +148,8 @@ pub async fn connect(endpoint: &Endpoint, mode: Mode) -> OsResult<PipeStream> {
         group_sid: None,
         server_peer: Some(PeerInfo {
             sid: Some(owner),
+            pid: server_pid,
+            exe: server_pid.and_then(win::exe_of_pid),
             ..PeerInfo::default()
         }),
     })

@@ -13,8 +13,10 @@ use windows_sys::Win32::Foundation::{
     CloseHandle, LocalFree, ERROR_INSUFFICIENT_BUFFER, HANDLE, HLOCAL,
 };
 use windows_sys::Win32::Security::Authorization::{
-    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
-    ConvertStringSidToSidW, GetSecurityInfo, SetSecurityInfo, SDDL_REVISION_1, SE_KERNEL_OBJECT,
+    ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, ConvertStringSidToSidW,
+    GetNamedSecurityInfoW, GetSecurityInfo, SetSecurityInfo, SDDL_REVISION_1, SE_FILE_OBJECT,
+    SE_KERNEL_OBJECT,
 };
 use windows_sys::Win32::Security::{
     CheckTokenMembership, GetSecurityDescriptorDacl, GetTokenInformation, LookupAccountNameW,
@@ -26,7 +28,9 @@ use windows_sys::Win32::Security::{
 use windows_sys::Win32::System::Diagnostics::Debug::{
     SetErrorMode, SEM_FAILCRITICALERRORS, SEM_NOGPFAULTERRORBOX,
 };
-use windows_sys::Win32::System::Pipes::{GetNamedPipeClientProcessId, ImpersonateNamedPipeClient};
+use windows_sys::Win32::System::Pipes::{
+    GetNamedPipeClientProcessId, GetNamedPipeServerProcessId, ImpersonateNamedPipeClient,
+};
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentThread, OpenProcess, OpenProcessToken, OpenThreadToken,
     QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
@@ -279,6 +283,14 @@ pub fn pipe_client_pid(pipe: HANDLE) -> io::Result<u32> {
     Ok(pid)
 }
 
+/// PID of the server on a client pipe handle (informational; `doctor` probes it).
+pub fn pipe_server_pid(pipe: HANDLE) -> io::Result<u32> {
+    let mut pid = 0u32;
+    // SAFETY: `pipe` is a valid client pipe handle.
+    check(unsafe { GetNamedPipeServerProcessId(pipe, &mut pid) })?;
+    Ok(pid)
+}
+
 /// Owner SID of a kernel object handle (used to verify who created a pipe).
 pub fn handle_owner_sid(handle: HANDLE) -> io::Result<String> {
     let mut owner: PSID = std::ptr::null_mut();
@@ -424,6 +436,62 @@ pub fn protect_current_process() -> io::Result<()> {
         return Err(io::Error::from_raw_os_error(rc as i32));
     }
     Ok(())
+}
+
+/// Whether this process's token holds `sid` as an enabled group (a deny-only group, such
+/// as Administrators in a non-elevated session, does not count).
+pub fn token_has_sid(sid: &str) -> io::Result<bool> {
+    let sid = string_to_sid(sid)?;
+    let mut member: BOOL = 0;
+    // SAFETY: a null token means this thread's effective token; `sid` is a valid SID.
+    check(unsafe { CheckTokenMembership(std::ptr::null_mut(), sid.ptr(), &mut member) })?;
+    Ok(member != 0)
+}
+
+/// Owner and DACL of a file or directory, as SDDL text.
+pub fn path_security_sddl(path: &std::path::Path) -> io::Result<String> {
+    use std::os::windows::ffi::OsStrExt;
+    let w: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let info = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+    let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    // SAFETY: `w` is NUL-terminated; `sd` receives a LocalAlloc'd descriptor (the
+    // owner/DACL out pointers are optional and left null).
+    let rc = unsafe {
+        GetNamedSecurityInfoW(
+            w.as_ptr(),
+            SE_FILE_OBJECT,
+            info,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut sd,
+        )
+    };
+    if rc != 0 {
+        return Err(io::Error::from_raw_os_error(rc as i32));
+    }
+    let sd = LocalBox(sd);
+    let mut text: PWSTR = std::ptr::null_mut();
+    // SAFETY: `sd` is a valid descriptor; `text` receives a LocalAlloc'd string.
+    check(unsafe {
+        ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            sd.ptr(),
+            SDDL_REVISION_1,
+            info,
+            &mut text,
+            std::ptr::null_mut(),
+        )
+    })?;
+    let guard = LocalBox(text as *mut c_void);
+    // SAFETY: the conversion returns a NUL-terminated string.
+    let s = unsafe { from_wide(text) };
+    drop(guard);
+    Ok(s)
 }
 
 /// No crash dialogs (and so no interactive WER prompt) for this process.

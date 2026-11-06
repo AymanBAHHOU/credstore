@@ -264,12 +264,41 @@ fn protection_status() -> FeatureStatus {
     )
 }
 
-/// Windows: ACL inspection is not built yet (M7).
+/// Whether only the owner, this user, SYSTEM and Administrators have access to `path`
+/// (allow entries in its DACL that apply to the object itself).
 #[cfg(windows)]
-pub fn is_owner_only(_: &Path) -> OsResult<bool> {
-    Err(OsError::unavailable(
-        "file ACL inspection not built yet (M7)",
-    ))
+pub fn is_owner_only(path: &Path) -> OsResult<bool> {
+    use crate::sys::current::win;
+    let sddl = win::path_security_sddl(path)?;
+    let me = win::current_user_sid()?;
+    Ok(sddl_is_owner_only(&sddl, &me))
+}
+
+/// SDDL check behind [`is_owner_only`] (kept separate so it can be unit tested).
+#[cfg(any(windows, test))]
+pub(crate) fn sddl_is_owner_only(sddl: &str, me: &str) -> bool {
+    // Only the owner (O:) and DACL (D:) sections were asked for; SIDs never contain "D:".
+    let Some(d) = sddl.find("D:") else {
+        return true; // no DACL section: the owner-only question does not arise
+    };
+    let owner = sddl[..d].strip_prefix("O:").unwrap_or_default();
+    let dacl = &sddl[d + 2..];
+    // A present but NULL DACL ("D:NO_ACCESS_CONTROL") grants everyone everything.
+    if dacl.starts_with("NO_ACCESS_CONTROL") {
+        return false;
+    }
+    let allowed = |sid: &str| matches!(sid, "SY" | "BA" | "OW") || sid == owner || sid == me;
+    dacl.split('(').skip(1).all(|ace| {
+        let ace = ace.split(')').next().unwrap_or_default();
+        let f: Vec<&str> = ace.split(';').collect();
+        let (kind, flags, sid) = (
+            f.first().copied().unwrap_or(""),
+            f.get(1).copied().unwrap_or(""),
+            f.get(5).copied().unwrap_or(""),
+        );
+        // Deny entries and inherit-only entries do not grant access to this object.
+        kind != "A" || flags.contains("IO") || allowed(sid)
+    })
 }
 
 #[cfg(test)]
@@ -316,7 +345,28 @@ mod tests {
         fs::remove_dir_all(d).unwrap();
     }
 
-    #[cfg(unix)]
+    #[test]
+    fn sddl_owner_only_check() {
+        let me = "S-1-5-21-1-2-3-1001";
+        assert!(sddl_is_owner_only(
+            "O:S-1-5-21-1-2-3-1001D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;S-1-5-21-1-2-3-1001)",
+            me
+        ));
+        assert!(sddl_is_owner_only("O:BAD:P(A;;FA;;;BA)(A;;FA;;;SY)", me));
+        // Users can read: not owner-only.
+        assert!(!sddl_is_owner_only(
+            "O:BAD:(A;;FA;;;SY)(A;;0x1200a9;;;BU)",
+            me
+        ));
+        // Creator Owner entries are inherit-only; deny entries never grant.
+        assert!(sddl_is_owner_only(
+            "O:BAD:(A;OICIIO;GA;;;CO)(D;;FA;;;WD)(A;;FA;;;BA)",
+            me
+        ));
+        assert!(!sddl_is_owner_only("O:BAD:NO_ACCESS_CONTROL", me));
+        assert!(!sddl_is_owner_only("O:BAD:(A;;FR;;;WD)", me));
+    }
+
     #[test]
     fn files_are_owner_only() {
         let d = tempdir("mode");

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  credstore daemon (spec 8.1). Installed by deploy/install.sh to
+  /Library/LaunchDaemons/dev.credstore.daemon.plist. Runs as _credstore.
+  /var/run/credstore is recreated at every boot by dev.credstore.rundir.plist; until it
+  exists the daemon exits and launchd restarts it (KeepAlive, ThrottleInterval).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.credstore.daemon</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/credstored</string>
+    </array>
+    <key>UserName</key>
+    <string>_credstore</string>
+    <key>GroupName</key>
+    <string>_credstore</string>
+    <!-- Supplementary groups, so the daemon can give its sockets to credstore-agents
+         and credstore-approvers. -->
+    <key>InitGroups</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <!-- 0077 -->
+    <key>Umask</key>
+    <integer>63</integer>
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>Core</key>
+        <integer>0</integer>
+    </dict>
+    <key>HardResourceLimits</key>
+    <dict>
+        <key>Core</key>
+        <integer>0</integer>
+    </dict>
+    <key>StandardErrorPath</key>
+    <string>/var/log/credstore/credstored.log</string>
+</dict>
+</plist>
