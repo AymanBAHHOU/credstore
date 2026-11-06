@@ -139,7 +139,9 @@ These settle gaps in the spec. They were confirmed by the human, not guessed.
 - **Peer check, Windows:** the pipe ACL comes from SDDL: owner set to the daemon's SID;
   dev grants only the daemon's user; installed grants the group read/write/attributes
   but not `FILE_CREATE_PIPE_INSTANCE`, so a client can't create a rogue server instance.
-  `first_pipe_instance` refuses to start if the name is already taken, and remote clients
+  Clients therefore open the pipe with exactly those rights (`win::open_pipe_client`,
+  identification-level QoS) rather than `GENERIC_WRITE`, which includes that right and
+  is refused. `first_pipe_instance` refuses to start if the name is already taken, and remote clients
   are refused. The client SID comes from briefly impersonating the client (Windows only
   knows it after the client has written, so the daemon authorizes after the first frame
   and before acting on it). Installed mode checks group membership with
