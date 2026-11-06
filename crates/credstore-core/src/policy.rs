@@ -208,6 +208,19 @@ fn bad(msg: impl Into<String>) -> PolicyError {
 impl Policy {
     /// Parse and validate a policy file.
     pub fn parse(text: &str, style: MatchStyle) -> Result<Self, PolicyError> {
+        Self::parse_with(text, style, &|_| None)
+    }
+
+    /// Like [`Policy::parse`], with `resolve` mapping a directory to its canonical form
+    /// (the daemon passes `fs::canonicalize`). Each `allow_dirs` pattern then also matches
+    /// with its literal leading directory canonicalized, because the request's cwd is
+    /// canonical: `/var/x/**` also allows `/private/var/x` on macOS, and a Windows
+    /// 8.3 short name also allows the long name.
+    pub fn parse_with(
+        text: &str,
+        style: MatchStyle,
+        resolve: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<Self, PolicyError> {
         let file: PolicyFile = toml::from_str(text).map_err(|e| bad(e.to_string()))?;
         let d = file.defaults;
         let base = Defaults::default();
@@ -256,11 +269,11 @@ impl Policy {
             let rules = SecretRules {
                 commands: s
                     .allow_commands
-                    .map(|p| compile(&where_, "allow_commands", p, style, false))
+                    .map(|p| compile(&where_, "allow_commands", p, style, None))
                     .transpose()?,
                 dirs: s
                     .allow_dirs
-                    .map(|p| compile(&where_, "allow_dirs", p, style, true))
+                    .map(|p| compile(&where_, "allow_dirs", p, style, Some(resolve)))
                     .transpose()?,
                 network,
                 allow_hosts,
@@ -345,20 +358,37 @@ fn compile(
     key: &str,
     patterns: Vec<String>,
     style: MatchStyle,
-    path_like: bool,
+    dirs: Option<&dyn Fn(&str) -> Option<String>>,
 ) -> Result<Patterns, PolicyError> {
+    let path_like = dirs.is_some();
     if patterns.is_empty() {
         return Err(bad(format!(
             "{where_} {key} is empty, which would allow nothing; remove it to allow anything"
         )));
     }
+    let norm = |p: &str| match style {
+        MatchStyle::Unix => p.to_owned(),
+        MatchStyle::Windows => p.trim_start_matches(r"\\?\").replace('\\', "/"),
+    };
+    let mut all: Vec<String> = patterns.iter().map(|p| norm(p)).collect();
+    if let Some(resolve) = dirs {
+        for p in all.clone() {
+            let lit = p.find(['*', '?', '[', '{']).unwrap_or(p.len());
+            let dir = match p[..lit].rfind('/') {
+                Some(i) if lit < p.len() => &p[..i.max(1)],
+                _ => &p[..lit],
+            };
+            if let Some(canon) = resolve(dir).map(|c| norm(&c)) {
+                if canon != dir && !canon.is_empty() {
+                    all.push(format!("{}{}", globset::escape(&canon), &p[dir.len()..]));
+                }
+            }
+        }
+    }
     let mut b = GlobSetBuilder::new();
-    for p in &patterns {
-        let norm = match style {
-            MatchStyle::Unix => p.clone(),
-            MatchStyle::Windows => p.replace('\\', "/"),
-        };
-        let g = GlobBuilder::new(&norm)
+    for (i, norm) in all.iter().enumerate() {
+        let p = patterns.get(i).unwrap_or(norm);
+        let g = GlobBuilder::new(norm)
             .case_insensitive(style == MatchStyle::Windows)
             // In directories `*` stays inside one component and `**` crosses them; in
             // commands `*` matches anything (URLs have slashes).

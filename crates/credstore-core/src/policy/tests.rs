@@ -547,3 +547,75 @@ fn empty_policy_uses_defaults() {
     assert!(e.require_approval);
     assert_eq!(e.grant_ttl_cap_secs, 600);
 }
+
+#[test]
+fn allow_dirs_also_match_the_canonical_form_of_their_prefix() {
+    let text = "[secret.K]\nallow_dirs = [\"/var/proj/**\", \"/tmp/x/*/app\", \"/exact\"]\n";
+    let resolve = |d: &str| match d {
+        "/var/proj" => Some("/private/var/proj".to_string()),
+        "/tmp/x" => Some("/private/tmp/x".to_string()),
+        "/exact" => Some("/real/exact".to_string()),
+        _ => None,
+    };
+    let p = Policy::parse_with(text, MatchStyle::Unix, &resolve).unwrap();
+    run(
+        &p,
+        &[
+            Case {
+                name: "as written",
+                secrets: &["K"],
+                cwd: "/var/proj/a",
+                ..BASE
+            },
+            Case {
+                name: "canonical",
+                secrets: &["K"],
+                cwd: "/private/var/proj/a",
+                ..BASE
+            },
+            Case {
+                name: "canonical root",
+                secrets: &["K"],
+                cwd: "/private/var/proj",
+                ..BASE
+            },
+            Case {
+                name: "canonical with star",
+                secrets: &["K"],
+                cwd: "/private/tmp/x/b/app",
+                ..BASE
+            },
+            Case {
+                name: "exact canonical",
+                secrets: &["K"],
+                cwd: "/real/exact",
+                ..BASE
+            },
+            Case {
+                name: "elsewhere",
+                secrets: &["K"],
+                cwd: "/private/var/other",
+                deny: Some("working directory not allowed for K (allowed: /var/proj/**,"),
+                ..BASE
+            },
+        ],
+    );
+
+    let w = Policy::parse_with(
+        "[secret.K]\nallow_dirs = [\"C:/Users/RUNNER~1/proj/**\"]\n",
+        MatchStyle::Windows,
+        &|d: &str| {
+            (d == "C:/Users/RUNNER~1/proj").then(|| r"\\?\C:\Users\runneradmin\proj".to_string())
+        },
+    )
+    .unwrap();
+    run(
+        &w,
+        &[Case {
+            name: "windows long name",
+            secrets: &["K"],
+            cwd: r"\\?\C:\Users\runneradmin\proj\src",
+            ..BASE
+        }],
+    );
+}

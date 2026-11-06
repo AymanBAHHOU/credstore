@@ -50,7 +50,12 @@ impl State {
     pub fn load_policy(&self, trigger: &str) -> Result<(), String> {
         let path = self.platform.policy_file();
         let loaded = match std::fs::read_to_string(path) {
-            Ok(text) => Policy::parse(&text, match_style()).map_err(|e| e.to_string()),
+            Ok(text) => Policy::parse_with(&text, match_style(), &|d| {
+                std::fs::canonicalize(d)
+                    .ok()
+                    .map(|c| c.to_string_lossy().into_owned())
+            })
+            .map_err(|e| e.to_string()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(format!(
                 "no policy file at {}{}",
                 path.display(),

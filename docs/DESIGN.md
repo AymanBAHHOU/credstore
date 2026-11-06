@@ -219,6 +219,12 @@ These settle gaps in the spec. They were confirmed by the human, not guessed.
   but not `./stripe listen` or `/tmp/stripe listen`; to allow a path, write the path.
   In commands `*` matches anything including `/` (URLs). In `allow_dirs`, `*` stays in
   one path component and `**` crosses components; `dir/**` also matches `dir` itself.
+- **Canonical `allow_dirs`.** The cwd is matched in canonical form, so when the policy
+  loads, each `allow_dirs` pattern's literal leading directory is canonicalized too (if
+  it exists) and the pattern matches either form. Without this, `/var/folders/...` would
+  never match on macOS (`/var` is a link to `/private/var`), nor would a Windows 8.3
+  short name like `RUNNER~1`. Directories created after the policy loads need a reload
+  for this.
 - **Shell mode** (stricter than the spec's `sh -c` wording): a `shell` string, or argv
   whose program is a shell (`sh`, `bash`, `zsh`, `dash`, `ksh`, `fish`, `csh`, `tcsh`,
   `busybox`, `cmd`, `powershell`, `pwsh`, ...) with any arguments, or a wrapper (`env`,
