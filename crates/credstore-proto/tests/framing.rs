@@ -125,6 +125,7 @@ fn responses_round_trip() {
             locked: true,
             dev_mode: true,
             pending: 0,
+            policy_error: Some("bad policy".into()),
         }),
         Response::Ok,
         Response::Error {

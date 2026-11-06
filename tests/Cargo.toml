@@ -13,6 +13,10 @@ path = "lib.rs"
 name = "m2_daemon"
 path = "m2_daemon.rs"
 
+[[test]]
+name = "m3_policy"
+path = "m3_policy.rs"
+
 [dependencies]
 anyhow.workspace = true
 credstore.workspace = true

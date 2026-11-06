@@ -11,6 +11,7 @@ use serde_json::json;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
+mod run;
 mod server;
 mod state;
 
@@ -35,6 +36,9 @@ pub async fn start(config: DaemonConfig) -> anyhow::Result<RunningDaemon> {
     osfs::create_private_dir(platform.data_dir()).context("creating the data directory")?;
     let audit = AuditLog::open(platform.audit_log()).context("opening the audit log")?;
     let state = Arc::new(state::State::new(platform, audit));
+    // A missing or invalid policy does not stop the daemon: runs are denied until
+    // `credstore reload` (or SIGHUP) loads a valid one.
+    let _ = state.load_policy("startup");
 
     let (agent, approver) = server::bind_all(&state)
         .await
@@ -78,6 +82,23 @@ pub async fn start(config: DaemonConfig) -> anyhow::Result<RunningDaemon> {
             }
         }
     }));
+
+    // Reload on SIGHUP (Unix; on Windows only `credstore reload` triggers it).
+    match credstore_os::signals::ReloadSignal::new() {
+        Ok(mut sig) => {
+            let reload_state = state.clone();
+            let mut reload_rx = rx.clone();
+            tasks.push(tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = reload_rx.changed() => return,
+                        _ = sig.recv() => { let _ = reload_state.load_policy("signal"); }
+                    }
+                }
+            }));
+        }
+        Err(e) => tracing::warn!(%e, "no reload signal; use `credstore reload`"),
+    }
 
     Ok(RunningDaemon {
         shutdown: tx,

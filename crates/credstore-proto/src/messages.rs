@@ -220,6 +220,9 @@ pub struct StatusInfo {
     pub locked: bool,
     pub dev_mode: bool,
     pub pending: u32,
+    /// Why the policy could not be loaded. While set, every run request is denied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

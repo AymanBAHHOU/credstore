@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use credstore::client::Client;
 use credstore::commands::Prompt;
 use credstore_os::{EndpointKind, Ipc, Paths, Platform, PlatformPaths};
-use credstore_proto::{SecretText, MAX_FRAME_LEN};
+use credstore_proto::{AgentRequest, ApproverOp, Response, RunRequest, SecretText, MAX_FRAME_LEN};
 use credstored::{DaemonConfig, RunningDaemon};
 
 /// The fake secret every adversarial test uses (spec section 10).
@@ -124,6 +124,24 @@ impl TestDaemon {
         .unwrap();
     }
 
+    /// Replace the policy file (takes effect on reload).
+    pub fn write_policy(&self, text: &str) {
+        std::fs::write(self.platform.policy_file(), text).unwrap();
+    }
+
+    /// Ask the daemon to reload its policy.
+    pub async fn reload(&self) -> Response {
+        self.client()
+            .approver(ApproverOp::Reload, pass())
+            .await
+            .unwrap()
+    }
+
+    /// Send a run request on the agent endpoint.
+    pub async fn run(&self, req: RunRequest) -> Response {
+        self.client().agent(&AgentRequest::Run(req)).await.unwrap()
+    }
+
     /// Raw connection to an endpoint.
     pub async fn connect(&self, kind: EndpointKind) -> <Platform as Ipc>::Stream {
         self.platform
@@ -204,3 +222,33 @@ impl Prompt for Scripted {
 
 /// Just over the frame limit.
 pub const OVERSIZE: u32 = MAX_FRAME_LEN + 1;
+
+/// A program that exists on every CI machine and is not a shell.
+pub fn harmless_program() -> &'static str {
+    if cfg!(windows) {
+        "hostname"
+    } else {
+        "echo"
+    }
+}
+
+/// A run request with a valid reason.
+pub fn run_request(argv: &[&str], secrets: &[&str], cwd: &Path) -> RunRequest {
+    RunRequest {
+        argv: Some(argv.iter().map(|s| s.to_string()).collect()),
+        shell: None,
+        secrets: secrets.iter().map(|s| s.to_string()).collect(),
+        reason: "Integration test: print something harmless".into(),
+        cwd: cwd.to_string_lossy().into_owned(),
+        timeout_secs: None,
+        injection: None,
+    }
+}
+
+/// The denial text, or panic.
+pub fn denial(r: &Response) -> &str {
+    match r {
+        Response::Denied { reason } => reason,
+        other => panic!("expected a denial, got {other:?}"),
+    }
+}

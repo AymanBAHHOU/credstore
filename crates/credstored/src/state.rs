@@ -1,11 +1,13 @@
 //! Daemon state and request handling (everything except socket plumbing).
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use credstore_core::audit::AuditLog;
+use credstore_core::policy::Policy;
 use credstore_core::vault::{Vault, VaultContents, VaultError};
-use credstore_os::{Mode, Paths, Platform};
+use credstore_os::{exec, Mode, Paths, Platform};
 use credstore_proto::{
     AgentRequest, ApproverOp, ApproverRequest, ErrorCode, PeerInfo, Proof, Response, StatusInfo,
 };
@@ -26,6 +28,10 @@ pub(crate) struct State {
     unlocked: Mutex<Option<Unlocked>>,
     limiter: Mutex<RateLimiter>,
     pub idle_ttl: Mutex<Duration>,
+    /// Loaded policy, or why it could not be loaded (then every run is denied).
+    pub(crate) policy: Mutex<Result<Arc<Policy>, String>>,
+    /// Where bare program names are looked up.
+    pub(crate) search_path: Vec<PathBuf>,
 }
 
 struct Unlocked {
@@ -106,6 +112,8 @@ impl State {
             unlocked: Mutex::new(None),
             limiter: Mutex::new(RateLimiter::new()),
             idle_ttl: Mutex::new(Duration::from_secs(600)),
+            policy: Mutex::new(Err("not loaded yet".into())),
+            search_path: exec::search_path(),
         }
     }
 
@@ -236,12 +244,12 @@ impl State {
                 Err(VaultError::Missing(_)) => Response::Secrets { secrets: vec![] },
                 Err(e) => error(ErrorCode::Internal, e.to_string()),
             },
-            AgentRequest::Run(_) => {
-                let _ = peer;
-                Response::Denied {
-                    reason: "running commands is not built yet".into(),
-                }
-            }
+            AgentRequest::Run(req) => match self.prepare_run(req, peer).await {
+                Ok(_prepared) => Response::Denied {
+                    reason: "policy allows this request, but approvals are not built yet".into(),
+                },
+                Err(resp) => resp,
+            },
         }
     }
 
@@ -277,6 +285,7 @@ impl State {
                 locked: !self.is_unlocked(),
                 dev_mode: self.mode() == Mode::Dev,
                 pending: 0,
+                policy_error: self.policy().err(),
             }),
             ApproverOp::AdminSet {
                 name,
@@ -296,8 +305,14 @@ impl State {
                 }
                 self.save(contents, &req.proof, peer, "rm", &name).await
             }
-            ApproverOp::Reload
-            | ApproverOp::SubscribePending
+            ApproverOp::Reload => match self.load_policy("request") {
+                Ok(()) => Response::Ok,
+                Err(e) => error(
+                    ErrorCode::BadRequest,
+                    format!("policy not loaded, so every run is denied until it is fixed: {e}"),
+                ),
+            },
+            ApproverOp::SubscribePending
             | ApproverOp::Approve { .. }
             | ApproverOp::Deny { .. }
             | ApproverOp::AdminRun(_) => error(ErrorCode::Unsupported, "not built yet"),
@@ -317,6 +332,7 @@ impl State {
                     None,
                     json!({"action": "init", "peer": peer_json(peer)}),
                 );
+                self.write_starter_policy();
                 Response::Ok
             }
             Ok(Err(e)) => error(ErrorCode::BadRequest, e.to_string()),

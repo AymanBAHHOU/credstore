@@ -141,6 +141,10 @@ pub async fn status(client: &Client, p: &dyn Prompt, out: &mut dyn Write) -> any
         },
         s.pending
     )?;
+    match &s.policy_error {
+        None => writeln!(out, "policy:  ok")?,
+        Some(e) => writeln!(out, "policy:  NOT LOADED, every run is denied: {e}")?,
+    }
     Ok(())
 }
 

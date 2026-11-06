@@ -178,6 +178,67 @@ These settle gaps in the spec. They were confirmed by the human, not guessed.
 - **WER:** crash dialogs are turned off with `SetErrorMode`; a machine-wide LocalDumps
   policy could still write a dump, so this is reported as partial.
 
+- **Dev socket paths on macOS:** a Unix socket path must fit in 104 bytes, and macOS temp
+  dirs are long. When `<dir>/approver.sock` would be over 100 bytes, dev-mode sockets
+  go in `/tmp/credstore-<uid>-<hash>`. `bind` refuses any socket directory that is not
+  owned by the daemon's user or that others can write (in same-user mode, read either),
+  so a directory someone else created in `/tmp` can't be used to swap the socket.
+
+## Policy (`credstore-core::policy`, M3)
+
+- **Format** as in spec 5.2, with these keys added under `[defaults]`: `strict`,
+  `grant_ttl_secs`, `session_idle_secs`, `approval_timeout_secs`, `allow_shell`,
+  `injection`, `allow_hosts`. Every per-secret key can also be set in `[defaults]`
+  except `allow_commands` and `allow_dirs`. Unknown keys are errors, so a typo like
+  `allow_dir` can't silently allow everything. An empty `allow_commands = []` is an
+  error rather than "allow nothing" (remove the key, or the secret).
+- **Validation:** numbers have ranges (runtime 1 s to 24 h, output 1 byte to 16 MiB, TTLs
+  at most 24 h, approval timeout 1 to 3600 s); `allow-list` needs a non-empty
+  `allow_hosts`, and `allow_hosts` without `allow-list` is an error; secret names follow
+  the vault rules. Errors name the table and key.
+- **Fail closed:** a missing, unreadable or invalid policy does not stop the daemon, but
+  every run is denied with the reason until a reload succeeds. `credstore status` shows
+  the policy error; `credstore reload` returns it. A failed reload replaces the old
+  policy with "deny everything" rather than keeping it.
+- **Starter policy:** in dev mode, `init` writes one (defaults only, plus a commented
+  example) if none exists. Installed mode: the installer writes it (M7).
+- **Reload:** `credstore reload` everywhere; SIGHUP on Linux and macOS. Each attempt is
+  audited as `config_reloaded` with `trigger` (`startup`, `init`, `request`, `signal`),
+  `ok` and `error`.
+- **Multiple secrets:** the request must pass every secret's rules. Effective limits are
+  the strictest: shortest runtime and output cap, smallest grant TTL, strictest sandbox
+  and network, and the intersection of allow-lists (empty intersection is a denial).
+  `timeout_secs` from the request can shorten the runtime, never lengthen it.
+- **Command matching.** The daemon resolves `argv[0]` itself (`credstore-os::exec`):
+  bare names through the daemon's `PATH` (absolute entries only, never the working
+  directory, which Windows would otherwise search first), names with a path relative to
+  the canonical `cwd`. The result is canonicalized (symlinks and `..` resolved), and that
+  path is what runs. `allow_commands` patterns are matched against the command line
+  `program + " " + args`, where `program` is the resolved full path, or, if `argv[0]`
+  was a bare name, also that name. So `stripe *` allows `stripe listen` found on PATH
+  but not `./stripe listen` or `/tmp/stripe listen`; to allow a path, write the path.
+  In commands `*` matches anything including `/` (URLs). In `allow_dirs`, `*` stays in
+  one path component and `**` crosses components; `dir/**` also matches `dir` itself.
+- **Shell mode** (stricter than the spec's `sh -c` wording): a `shell` string, or argv
+  whose program is a shell (`sh`, `bash`, `zsh`, `dash`, `ksh`, `fish`, `csh`, `tcsh`,
+  `busybox`, `cmd`, `powershell`, `pwsh`, ...) with any arguments, or a wrapper (`env`,
+  `xargs`, `nohup`, `timeout`, `sudo`, ...) whose arguments name a shell. Running a
+  shell script by path is shell mode too. Each secret must set `allow_shell = true`.
+- **Windows matching:** command lines and paths are case-folded, backslashes become `/`,
+  the `\\?\` prefix is dropped, and `.exe`/`.cmd`/`.bat`/`.com` are dropped from the
+  program.
+- **Request checks before policy** (`credstore-core::request`, spec 6.2 step 2): exactly
+  one of argv/shell; at most 256 args and 64 KiB; no NUL bytes; 1 to 16 distinct valid
+  secret names that exist in the index; `reason` 10 to 300 characters with no control
+  characters (it is shown on the approval screen, where escape codes could rewrite what
+  the human sees); absolute, existing `cwd` (canonicalized); `stdin` injection with
+  exactly one secret; the program must resolve. These errors never quote the input.
+- **Audit:** `request` (peer, secrets, argv or shell, resolved program, cwd, reason,
+  injection) for every well-formed request, then `policy_denied` with `denial` when
+  policy refuses it. Malformed requests are refused without an audit record.
+- **Until M4,** a request that passes policy is answered with a denial saying approvals
+  are not built yet.
+
 ## Stubbed per OS
 
 | Capability      | Linux                 | macOS                 | Windows               |
