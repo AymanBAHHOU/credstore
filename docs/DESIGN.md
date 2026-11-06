@@ -281,7 +281,7 @@ These settle gaps in the spec. They were confirmed by the human, not guessed.
   characters replaced, so an argv or path can't rewrite the screen.
 - **New audit fields:** `approved` has `via` (`human`, `grant`, `policy`), `scope`
   (`"once"` or `{"session_secs": N}`) and the approver's peer; `denied` has `via`
-  (`human`, `timeout`, `shutdown`).
+  (`human`, `timeout`, `shutdown`, `disconnect`).
 - **Zeroization check:** `lock` reports how many values it wiped, and the tests check
   that number. Values handed to an approved request are dropped (and zeroized) after
   use. Reading freed memory to prove it would need `unsafe` in tests, which the
@@ -388,8 +388,45 @@ without entitlements), network deny, a background process outliving the timeout,
 flood, file and stdin injection cleanup, concurrent approvals, and the startup sweep.
 Every test checks the value is absent from results, the audit log, every file under the
 test tree, and all `tracing` output (captured in-process). Endpoint misuse and bad input
-are in `m2_daemon.rs` and `m3_policy.rs`. Running as root without a sandbox skips the
-memory test (root reads any process).
+are in `m2_daemon.rs` and `m3_policy.rs`. The memory test is skipped when the test runs
+with root or with Windows `SeDebugPrivilege` enabled and no isolating sandbox: those
+read any process whatever its protection (GitHub's Windows runners are elevated with
+the privilege on). `probe::bypasses_process_protection` reports it, and `doctor` will
+warn about it: an agent running as an admin with debug privileges can read daemon
+memory in dev mode.
+
+## MCP shim (`credstore mcp`, M6)
+
+- Built on **`rmcp` 3.9** (the official SDK, as the spec prefers), default features off:
+  `server`, `macros`, `transport-io` only. No HTTP transport, no auth code. rmcp
+  handles protocol version negotiation, which matters: the 2026-07-28 MCP revision
+  dropped the `initialize` handshake, and a hand-rolled server would have to track that.
+- Tools: `list_secrets` (no input) and `run_with_secrets`. There is no tool that returns
+  a value, and the shim could not offer one: it holds no secrets and only relays the
+  agent endpoint, which never sends values.
+- **Strict input schema** for `run_with_secrets` (generated with schemars from the
+  argument struct): unknown fields rejected (`additionalProperties: false`), `reason`
+  10 to 300 characters, `secrets` 1 to 16, `argv` 1 to 256, `timeout_secs` 1 to 86400,
+  `injection` one of `env`, `file`, `stdin`. The daemon validates everything again.
+- **`cwd` is optional** (deviation: the spec example always passes it). It defaults to
+  the directory the shim runs in, which is the agent's project folder when Claude Code
+  starts it.
+- Results: the run result as JSON text (`exit_code`, `stdout`, `stderr`, `truncated`,
+  `redactions`). Denials and daemon errors come back as tool errors (`isError: true`)
+  with `{"denied": ...}` or `{"error": ...}`, so the agent sees the call did not run.
+- The call blocks until the human decides or the policy approval timeout ends
+  (`{"denied": "approval timed out"}`). If the MCP client cancels the call or exits,
+  the shim's connection closes and the daemon drops the pending request (audited as
+  `denied` with `via: "disconnect"`), so the human is not left approving a request
+  nobody waits for. A command that has already started runs to completion.
+- `init` and the installers print `claude mcp add credstore -- credstore mcp` and tell
+  the user not to allowlist the tools.
+- **Tested** by `crates/credstore/tests/mcp_stdio.rs`, which runs the real binary over
+  stdio against a dev daemon: initialize, the tool list and schema, `list_secrets`, an
+  approved run with redacted output, a denied run, unknown fields, a missing reason, an
+  unknown tool, and that nothing the shim wrote contains the secret. **Not verified
+  here:** a session with Claude Code itself (registering the server changes the user's
+  Claude Code config, which these sessions do not do).
 
 ## Stubbed per OS
 
@@ -418,6 +455,7 @@ real terminal is not, since CI has none.
 
 - `tracing-subscriber`: needed to actually emit `tracing` output (stderr only) from the
   binaries.
+- `rmcp` (in the spec's list): see the MCP section.
 
 ## Dependency advisories
 

@@ -258,7 +258,14 @@ impl State {
     // Agent endpoint
     // ------------------------------------------------------------------
 
-    pub async fn agent(self: &Arc<Self>, req: AgentRequest, peer: &PeerInfo) -> Response {
+    /// `closed` resolves if the agent hangs up. A request still waiting for the human is
+    /// then cancelled; a command that is already running is left to finish.
+    pub async fn agent(
+        self: &Arc<Self>,
+        req: AgentRequest,
+        peer: &PeerInfo,
+        closed: impl std::future::Future<Output = ()>,
+    ) -> Response {
         match req {
             AgentRequest::ListSecrets => match self.vault.list() {
                 Ok(secrets) => Response::Secrets { secrets },
@@ -270,7 +277,14 @@ impl State {
                     Ok(p) => p,
                     Err(resp) => return resp,
                 };
-                match self.authorize_run(&prepared, peer).await {
+                let decision = tokio::select! {
+                    d = self.authorize_run(&prepared, peer) => d,
+                    () = closed => {
+                        self.cancel_request(&prepared.id, "disconnect");
+                        return Response::Denied { reason: "the agent disconnected".into() };
+                    }
+                };
+                match decision {
                     Ok(values) => self.execute(prepared, values).await,
                     Err(resp) => resp,
                 }

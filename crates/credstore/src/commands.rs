@@ -44,8 +44,15 @@ pub async fn init(client: &Client, p: &dyn Prompt, msg: &mut dyn Write) -> anyho
         msg,
         "There is no way to recover the vault without this passphrase."
     )?;
+    writeln!(msg, "{MCP_HINT}")?;
     Ok(())
 }
+
+/// How to connect an agent, printed by `init` and the installers.
+pub const MCP_HINT: &str = "Register the MCP server with Claude Code:
+  claude mcp add credstore -- credstore mcp            (installed)
+  claude mcp add credstore -- credstore --dev mcp      (dev mode)
+Do not allowlist its tools, so Claude Code asks you too.";
 
 pub async fn set(
     client: &Client,

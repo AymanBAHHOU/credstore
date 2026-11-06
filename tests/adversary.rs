@@ -148,7 +148,10 @@ fn read_memory(pid: &str, needle: &[u8]) -> String {
     if !cfg!(target_os = "linux") {
         use credstore_os::probe::{process_memory_access, MemoryAccess};
         return match process_memory_access(pid.parse().unwrap_or(0)) {
-            MemoryAccess::Readable => "OPENED the daemon for reading".into(),
+            MemoryAccess::Readable => format!(
+                "OPENED the daemon for reading (debug privileges: {})",
+                credstore_os::probe::bypasses_process_protection()
+            ),
             MemoryAccess::Denied(e) => format!("denied: {e}"),
             MemoryAccess::Unsupported(e) => format!("unsupported: {e}"),
         };

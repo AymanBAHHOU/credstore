@@ -18,9 +18,10 @@ use windows_sys::Win32::Security::Authorization::{
 };
 use windows_sys::Win32::Security::{
     CheckTokenMembership, GetSecurityDescriptorDacl, GetTokenInformation, LookupAccountNameW,
-    RevertToSelf, TokenUser, ACL, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
+    LookupPrivilegeValueW, RevertToSelf, TokenPrivileges, TokenUser, ACL,
+    DACL_SECURITY_INFORMATION, LUID_AND_ATTRIBUTES, OWNER_SECURITY_INFORMATION,
     PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
-    SID_NAME_USE, TOKEN_QUERY, TOKEN_USER,
+    SE_PRIVILEGE_ENABLED, SID_NAME_USE, TOKEN_PRIVILEGES, TOKEN_QUERY, TOKEN_USER,
 };
 use windows_sys::Win32::System::Diagnostics::Debug::{
     SetErrorMode, SEM_FAILCRITICALERRORS, SEM_NOGPFAULTERRORBOX,
@@ -324,6 +325,64 @@ pub fn exe_of_pid(pid: u32) -> Option<String> {
 /// owner's implicit READ_CONTROL / WRITE_DAC. Accounts with SeDebugPrivilege bypass this.
 /// Terminate is allowed so the user can always stop a dev daemon; it is not a
 /// confidentiality risk.
+/// Whether this process has `SeDebugPrivilege` enabled, which opens any process for
+/// memory reads whatever its DACL says (elevated admins on CI runners, for example).
+pub fn debug_privilege_enabled() -> bool {
+    let mut luid = windows_sys::Win32::Foundation::LUID {
+        LowPart: 0,
+        HighPart: 0,
+    };
+    let name = wide("SeDebugPrivilege");
+    // SAFETY: NUL-terminated name; `luid` is a valid out pointer.
+    if unsafe { LookupPrivilegeValueW(std::ptr::null(), name.as_ptr(), &mut luid) } == 0 {
+        return false;
+    }
+    let mut token: HANDLE = std::ptr::null_mut();
+    // SAFETY: GetCurrentProcess is a pseudo handle; `token` receives a new handle.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return false;
+    }
+    let token = OwnedHandle(token);
+    let mut len = 0u32;
+    // SAFETY: size query with a null buffer.
+    unsafe {
+        GetTokenInformation(
+            token.raw(),
+            TokenPrivileges,
+            std::ptr::null_mut(),
+            0,
+            &mut len,
+        )
+    };
+    if len == 0 {
+        return false;
+    }
+    let mut buf = vec![0u64; (len as usize).div_ceil(8)];
+    // SAFETY: `buf` is at least `len` bytes and 8-byte aligned.
+    let ok = unsafe {
+        GetTokenInformation(
+            token.raw(),
+            TokenPrivileges,
+            buf.as_mut_ptr() as *mut c_void,
+            len,
+            &mut len,
+        )
+    };
+    if ok == 0 {
+        return false;
+    }
+    // SAFETY: the call filled `buf` with a TOKEN_PRIVILEGES of `PrivilegeCount` entries.
+    let privs: &[LUID_AND_ATTRIBUTES] = unsafe {
+        let tp = &*(buf.as_ptr() as *const TOKEN_PRIVILEGES);
+        std::slice::from_raw_parts(tp.Privileges.as_ptr(), tp.PrivilegeCount as usize)
+    };
+    privs.iter().any(|p| {
+        p.Luid.LowPart == luid.LowPart
+            && p.Luid.HighPart == luid.HighPart
+            && p.Attributes & SE_PRIVILEGE_ENABLED != 0
+    })
+}
+
 /// Try `OpenProcess(PROCESS_VM_READ)` on `pid` (the handle is closed at once).
 pub fn open_for_memory_read(pid: u32) -> crate::probe::MemoryAccess {
     // SAFETY: plain call; a non-null handle is owned and closed by `OwnedHandle`.

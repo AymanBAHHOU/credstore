@@ -378,3 +378,24 @@ async fn agent_endpoint_cannot_subscribe_or_approve() {
     assert_eq!(denial(&r), "approval timed out");
     d.stop().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_request_is_cancelled_when_its_agent_disconnects() {
+    let (d, dir) = ready("m4gone", "[defaults]\napproval_timeout_secs = 60\n").await;
+    let client = d.client();
+    let request = req(&dir, "API_KEY");
+    let task = tokio::spawn(async move {
+        client
+            .agent(&credstore_proto::AgentRequest::Run(request))
+            .await
+    });
+    d.wait_pending(1).await;
+    task.abort();
+    let _ = task.await;
+    // The human no longer sees it, and the audit log says why.
+    d.wait_pending(0).await;
+    let denied = d.records("denied");
+    assert_eq!(denied.last().unwrap()["via"], "disconnect", "{denied:?}");
+    assert!(d.records("run_started").is_empty());
+    d.stop().await;
+}

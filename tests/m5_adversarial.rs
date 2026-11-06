@@ -81,18 +81,6 @@ fn assert_clean(d: &TestDaemon, results: &[&RunResult]) {
     );
 }
 
-/// Linux: whether this test runs as root (from `/proc/self/status`).
-fn running_as_root() -> bool {
-    std::fs::read_to_string("/proc/self/status")
-        .ok()
-        .and_then(|s| {
-            s.lines()
-                .find_map(|l| l.strip_prefix("Uid:"))
-                .map(|u| u.split_whitespace().nth(1) == Some("0"))
-        })
-        .unwrap_or(false)
-}
-
 fn last_record(d: &TestDaemon, event: &str) -> serde_json::Value {
     d.records(event)
         .pop()
@@ -237,9 +225,15 @@ async fn daemon_memory_cannot_be_read() {
     for item in d.platform.harden_process() {
         eprintln!("hardening: {} = {:?}", item.name, item.status);
     }
-    if running_as_root() && capabilities().mode == credstore_proto::SandboxMode::None {
-        // CAP_SYS_PTRACE reads any process; only a sandbox (or another user) stops it.
-        eprintln!("skipped: running as root without a sandbox");
+    // Root (CAP_SYS_PTRACE) and Windows SeDebugPrivilege read any process whatever its
+    // protection; only a sandbox that isolates the daemon (or another user) stops them.
+    use credstore_proto::SandboxMode;
+    let isolated = matches!(
+        capabilities().mode,
+        SandboxMode::Bwrap | SandboxMode::Landlock | SandboxMode::Seatbelt
+    );
+    if credstore_os::probe::bypasses_process_protection() && !isolated {
+        eprintln!("skipped: this test runs with root or debug privileges and no sandbox");
         d.stop().await;
         return;
     }

@@ -18,6 +18,23 @@ pub fn process_memory_access(pid: u32) -> MemoryAccess {
     imp(pid)
 }
 
+/// Whether this process can read other processes' memory whatever their protection:
+/// root on Unix, `SeDebugPrivilege` enabled on Windows. Hardening cannot stop such a
+/// user; only a sandbox (or running the agent as another, unprivileged user) can.
+pub fn bypasses_process_protection() -> bool {
+    privileged()
+}
+
+#[cfg(unix)]
+fn privileged() -> bool {
+    nix::unistd::geteuid().is_root()
+}
+
+#[cfg(windows)]
+fn privileged() -> bool {
+    crate::sys::current::win::debug_privilege_enabled()
+}
+
 #[cfg(target_os = "linux")]
 fn imp(pid: u32) -> MemoryAccess {
     match std::fs::File::open(format!("/proc/{pid}/mem")) {

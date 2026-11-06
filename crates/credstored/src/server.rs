@@ -91,7 +91,7 @@ async fn serve<S: IpcStream>(
         };
         let response = match which {
             Endpoint::Agent => match decode::<AgentRequest>(&payload) {
-                Ok(req) => state.agent(req, &who).await,
+                Ok(req) => state.agent(req, &who, closed(&mut stream)).await,
                 Err(e) => error(ErrorCode::BadRequest, e.to_string()),
             },
             Endpoint::Approver => match decode::<ApproverRequest>(&payload) {
@@ -115,6 +115,13 @@ async fn serve<S: IpcStream>(
             return;
         }
     }
+}
+
+/// Resolves when the client closes the connection (or sends anything, which it must not
+/// do while waiting for a reply).
+async fn closed<S: IpcStream>(stream: &mut S) {
+    let mut b = [0u8; 1];
+    let _ = stream.read(&mut b).await;
 }
 
 /// Send the pending list now and after every change, until the client closes the

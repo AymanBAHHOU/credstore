@@ -121,6 +121,15 @@ impl State {
         self.approvals().grants.clear();
     }
 
+    /// Drop one waiting request (its agent went away) and audit why.
+    pub fn cancel_request(&self, id: &str, via: &str) {
+        if self.approvals().pending.remove(id).is_some() {
+            self.notify();
+            let _ = self.audit("denied", Some(id), json!({"via": via}));
+            tracing::info!(id, via, "pending request cancelled");
+        }
+    }
+
     /// Cancel every waiting request (shutdown).
     pub fn cancel_pending(&self) {
         let drained = std::mem::take(&mut self.approvals().pending);
