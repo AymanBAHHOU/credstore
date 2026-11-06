@@ -192,6 +192,9 @@ pub struct Policy {
     style: MatchStyle,
 }
 
+/// Maps a directory to its canonical form, if it exists.
+pub type DirResolver<'a> = &'a dyn Fn(&str) -> Option<String>;
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("policy error: {0}")]
 pub struct PolicyError(pub String);
@@ -219,7 +222,7 @@ impl Policy {
     pub fn parse_with(
         text: &str,
         style: MatchStyle,
-        resolve: &dyn Fn(&str) -> Option<String>,
+        resolve: DirResolver<'_>,
     ) -> Result<Self, PolicyError> {
         let file: PolicyFile = toml::from_str(text).map_err(|e| bad(e.to_string()))?;
         let d = file.defaults;
@@ -358,7 +361,7 @@ fn compile(
     key: &str,
     patterns: Vec<String>,
     style: MatchStyle,
-    dirs: Option<&dyn Fn(&str) -> Option<String>>,
+    dirs: Option<DirResolver<'_>>,
 ) -> Result<Patterns, PolicyError> {
     let path_like = dirs.is_some();
     if patterns.is_empty() {
