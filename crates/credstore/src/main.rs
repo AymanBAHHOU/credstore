@@ -3,8 +3,15 @@
 //! Neither decrypts anything; both talk to `credstored`. Secret values are never accepted
 //! on argv or from the CLI's own environment.
 
+use std::process::ExitCode;
+
 use clap::{Parser, Subcommand};
+use credstore_core::vault::Vault;
+use credstore_os::{Mode, Paths, Platform, Terminal};
+use credstore_proto::SecretText;
 use tracing_subscriber::EnvFilter;
+
+mod commands;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -71,13 +78,21 @@ enum AuditAction {
     Verify,
 }
 
-fn main() -> std::process::ExitCode {
+fn main() -> ExitCode {
     init_tracing();
     let cli = Cli::parse();
     tracing::debug!(dev = cli.dev, "credstore starting");
 
     let milestone = match &cli.command {
-        Command::Init | Command::Set { .. } | Command::List | Command::Rm { .. } => "M1",
+        Command::Init | Command::Set { .. } | Command::List | Command::Rm { .. } => {
+            return match vault_command(&cli) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("credstore: error: {e:#}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
         Command::Audit { .. } | Command::Status | Command::Lock => "M2",
         Command::Reload => "M3",
         Command::Watch => "M4",
@@ -86,7 +101,42 @@ fn main() -> std::process::ExitCode {
         Command::Doctor => "M7",
     };
     eprintln!("credstore: this command is not built yet ({milestone}).");
-    std::process::ExitCode::from(2)
+    ExitCode::from(2)
+}
+
+/// `init`, `set`, `list`, `rm` against the dev-mode vault (M1: no daemon yet).
+fn vault_command(cli: &Cli) -> anyhow::Result<()> {
+    if !cli.dev {
+        anyhow::bail!(
+            "installed mode needs the daemon, which is not built yet (M2). \
+             Use --dev to work on the dev-mode vault."
+        );
+    }
+    let platform = Platform::new(Mode::Dev)?;
+    let vault = Vault::new(platform.vault_file(), platform.index_file());
+    let prompt = TerminalPrompt(&platform);
+    let mut msg = std::io::stderr();
+    match &cli.command {
+        Command::Init => commands::init(&vault, &prompt, &mut msg),
+        Command::Set { name, description } => {
+            commands::set(&vault, name, description.clone(), &prompt, &mut msg)
+        }
+        Command::List => commands::list(&vault, &mut std::io::stdout(), &mut msg),
+        Command::Rm { name } => commands::rm(&vault, name, &prompt, &mut msg),
+        _ => unreachable!("not a vault command"),
+    }
+}
+
+/// Reads hidden input from the controlling terminal, never from stdin.
+struct TerminalPrompt<'a>(&'a Platform);
+
+impl commands::Prompt for TerminalPrompt<'_> {
+    fn secret(&self, prompt: &str) -> anyhow::Result<SecretText> {
+        if !self.0.has_terminal() {
+            anyhow::bail!("this command needs a terminal to read hidden input");
+        }
+        Ok(self.0.read_passphrase(prompt)?)
+    }
 }
 
 fn init_tracing() {

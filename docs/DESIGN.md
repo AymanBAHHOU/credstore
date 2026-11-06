@@ -65,11 +65,67 @@ These settle gaps in the spec. They were confirmed by the human, not guessed.
 - **Installed run dir** (not in spec 5.4): Linux `/run/credstore/run` (tmpfs), macOS
   `/var/run/credstore/run`, Windows `%ProgramData%\credstore\run`.
 
+## Vault (`credstore-core::vault`, M1)
+
+- **Fixed scrypt cost.** New vaults use N = 2^18 (256 MiB, about 0.5-1 s). age's default
+  picks the cost by timing the machine, so a debug build or a busy CPU would silently
+  write a weaker vault; a fixed cost avoids that. Opening accepts up to 2^20 (1 GiB) to
+  bound memory. Unit tests use a cheap cost through a `cfg(test)`-only constructor, so
+  no release build can reach it.
+- **Debug builds optimize the KDF crates** (`scrypt`, `salsa20`, `pbkdf2`, `sha2`,
+  `hmac` at opt-level 3 in `[profile.dev]`) so tests and dev use stay fast. This affects
+  speed only, since the cost is fixed.
+- **Plaintext is zeroized.** Decryption uses age's `Decryptor` directly and reads into a
+  `Zeroizing` buffer; age's `decrypt()` helper returns a plain `Vec`. Values are
+  `SecretText`.
+- **The passphrase is never kept.** `Vault` holds only paths. `unlock` and `save` take
+  the passphrase each time, matching decision 2: every write carries a fresh proof.
+- **Wrong passphrase vs. damage.** With a scrypt stanza, age reports a wrong passphrase
+  as `DecryptionFailed` while unwrapping the file key; that maps to `WrongPassphrase`.
+  A damaged header that still parses can't be told apart from a wrong passphrase. A
+  damaged payload is reported as `Corrupt`.
+- **Names are encrypted too.** The vault plaintext holds names, descriptions,
+  timestamps and values. The index holds names and descriptions only.
+- **Write order: vault, then index.** The index is rebuilt from the vault on every save,
+  so after a crash between the two writes it lags by at most one operation and repairs
+  itself on the next `set` or `rm`.
+- **Atomic writes** live in `credstore-os::fs`: temp file in the same directory, fsync,
+  rename, fsync the directory (Unix). Leftover temp files from a killed writer are
+  removed on the next write. On Windows the rename is retried briefly if another process
+  (an indexer, antivirus) holds the file.
+- **Crash test.** `killing_a_writer_never_corrupts_the_vault` starts the test binary
+  itself as a writer that saves in a loop, kills it at a different point in each of 12
+  rounds, and checks the vault opens and the index parses every time.
+- **No locking between writers.** Two `credstore set` runs at the same moment can lose
+  one update. From M2 the daemon is the only writer.
+- **Input rules (not in spec):** names at most 128 chars; descriptions at most 300 chars
+  with no control characters (they are shown in the approval TUI, where escape sequences
+  could disguise a request); values non-empty, at most 64 KiB, no NUL (an environment
+  variable can't hold one). `list` also masks control characters, since the index is a
+  plain file. Error messages never repeat the input, in case a value was typed into the
+  wrong place.
+- **Minimum passphrase length: 8** (not in spec).
+
+## CLI (M1)
+
+- `init`, `set`, `list`, `rm` work in dev mode (`--dev`) directly on the vault file.
+  Without `--dev` they refuse: installed mode needs the daemon (M2).
+- Passphrase and value prompts read the controlling terminal through `Terminal`, never
+  stdin. Checked by hand on both OSes: with piped stdin on Windows, `init` keeps waiting
+  for console input; on Linux with no controlling terminal, it refuses. Neither creates a
+  vault. The automated version is M4's piped-stdin test.
+- `set` asks for the value once (no confirmation) and warns when it is shorter than 6
+  characters, since redaction skips such values.
+- The command logic (`credstore/src/commands.rs`) takes the prompt as a parameter, so
+  tests script the answers without a terminal.
+
 ## Stubbed per OS
 
 | Capability      | Linux                 | macOS                 | Windows               |
 | --------------- | --------------------- | --------------------- | --------------------- |
 | Paths           | done                  | done                  | done                  |
+| Private files   | done (0600/0700)      | done (0600/0700)      | stub, M7 (inherits folder ACL) |
+| Atomic replace  | done                  | done                  | done                  |
 | Terminal prompt | done (`rpassword`)    | done (`rpassword`)    | done (`rpassword`)    |
 | IPC             | stub, M2              | stub, M2              | stub, M2              |
 | Peer identity   | stub, M2              | stub, M2              | stub, M2              |
@@ -87,6 +143,16 @@ yet exercised by an automated test (it needs a real tty; M4 adds the piped-stdin
 
 - `tracing-subscriber`: needed to actually emit `tracing` output (stderr only) from the
   binaries.
+
+## Dependency advisories
+
+- **age stays on 0.11.5.** age 0.12 pulls in `crypto-bigint` 0.5, which has a timing
+  vulnerability (RUSTSEC-2026-0387).
+- age 0.11 brings two crates flagged "unmaintained" (not vulnerable): `basic-toml`
+  (RUSTSEC-2026-0374) and `proc-macro-error2` (RUSTSEC-2026-0173). Both run only at
+  build time, for age's translated error messages. They are allowed by ID in
+  `deny.toml`, with reasons, so any new advisory still fails CI. Revisit when age
+  releases a version without them.
 
 ## CI
 

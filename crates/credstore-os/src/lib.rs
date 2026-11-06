@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use credstore_proto::{NetworkPolicy, PeerInfo, SandboxMode, SecretText};
 use tokio::io::{AsyncRead, AsyncWrite};
 
+pub mod fs;
 mod paths;
 mod platform;
 mod stub;

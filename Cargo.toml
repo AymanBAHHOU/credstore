@@ -19,7 +19,9 @@ credstore-proto = { path = "crates/credstore-proto" }
 credstore-core = { path = "crates/credstore-core" }
 credstore-os = { path = "crates/credstore-os" }
 
+age = "0.11"
 anyhow = "1"
+time = { version = "0.3", features = ["formatting"] }
 clap = { version = "4", features = ["derive"] }
 directories = "6"
 rpassword = "7"
@@ -30,6 +32,19 @@ tokio = { version = "1", default-features = false }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 zeroize = "1"
+
+# scrypt is very slow unoptimized; the vault's scrypt cost is fixed (not timing-based),
+# so this only affects speed. Optimize the KDF crates in debug and test builds.
+[profile.dev.package.scrypt]
+opt-level = 3
+[profile.dev.package.salsa20]
+opt-level = 3
+[profile.dev.package.pbkdf2]
+opt-level = 3
+[profile.dev.package.sha2]
+opt-level = 3
+[profile.dev.package.hmac]
+opt-level = 3
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

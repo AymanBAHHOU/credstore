@@ -4,6 +4,17 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+# Each ignore needs a reason. Revisit when age publishes a release without them.
+ignore = [
+    # basic-toml: unmaintained. Build-time only, via age -> i18n-embed-fl/i18n-config,
+    # which read age's localization config while compiling. Never handles secrets.
+    # age 0.12 drops it but adds crypto-bigint with RUSTSEC-2026-0387 (timing), so we
+    # stay on 0.11.
+    { id = "RUSTSEC-2026-0374", reason = "build-time only via age 0.11 i18n macros" },
+    # proc-macro-error2: unmaintained proc-macro helper, via age -> i18n-embed-fl.
+    # Runs only inside the compiler.
+    { id = "RUSTSEC-2026-0173", reason = "compile-time proc-macro via age 0.11 i18n" },
+]
 
 [licenses]
 version = 2
