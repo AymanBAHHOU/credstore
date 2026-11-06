@@ -129,7 +129,7 @@ impl VaultContents {
             names::validate_description(d)?;
         }
         let too_short_to_redact = value.expose().chars().count() < MIN_REDACTABLE_LEN;
-        let now = now_rfc3339();
+        let now = crate::util::now_rfc3339();
         let replaced = match self.secrets.get_mut(name) {
             Some(e) => {
                 e.value = value;
@@ -156,6 +156,17 @@ impl VaultContents {
             replaced,
             too_short_to_redact,
         })
+    }
+
+    /// Zeroize every value in place, then drop all entries. Returns how many values were
+    /// wiped (used by tests and the `lock` audit record; never their lengths).
+    pub fn wipe(&mut self) -> usize {
+        let n = self.secrets.len();
+        for e in self.secrets.values_mut() {
+            e.value.wipe();
+        }
+        self.secrets.clear();
+        n
     }
 
     pub fn remove(&mut self, name: &str) -> Result<(), VaultError> {
@@ -380,13 +391,6 @@ fn read_bounded(path: &Path, max: u64) -> std::io::Result<Option<Vec<u8>>> {
     let mut buf = Vec::new();
     f.take(max + 1).read_to_end(&mut buf)?;
     Ok((buf.len() as u64 <= max).then_some(buf))
-}
-
-fn now_rfc3339() -> String {
-    let now = time::OffsetDateTime::now_utc();
-    let now = now.replace_nanosecond(0).unwrap_or(now);
-    now.format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_default()
 }
 
 #[cfg(test)]

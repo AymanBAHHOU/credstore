@@ -67,6 +67,26 @@ pub fn write_private_atomic(path: &Path, data: &[u8]) -> OsResult<()> {
     result.map_err(OsError::from)
 }
 
+/// Open `path` for appending, creating it owner-only (Unix 0600) if missing.
+pub fn open_append_private(path: &Path) -> OsResult<File> {
+    Ok(append_options().open(path)?)
+}
+
+#[cfg(unix)]
+fn append_options() -> OpenOptions {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut o = OpenOptions::new();
+    o.read(true).append(true).create(true).mode(0o600);
+    o
+}
+
+#[cfg(windows)]
+fn append_options() -> OpenOptions {
+    let mut o = OpenOptions::new();
+    o.read(true).append(true).create(true);
+    o
+}
+
 fn temp_prefix(name: &str) -> String {
     format!(".{name}.tmp-")
 }

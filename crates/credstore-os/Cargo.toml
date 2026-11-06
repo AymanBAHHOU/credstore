@@ -11,14 +11,24 @@ credstore-proto.workspace = true
 directories.workspace = true
 rpassword.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["io-util"] }
+tokio = { workspace = true, features = ["io-util", "net", "process", "rt", "signal", "sync", "time"] }
+tracing.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+nix.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["io-util", "macros", "rt"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "time"] }
 
 # This crate is the one place allowed to hold small, commented `unsafe` modules for
 # platform calls the safe crates do not cover. It denies (not forbids) unsafe so such a
-# module can opt in with `#[allow(unsafe_code)]`. M0 has none.
+# module can opt in with `#[allow(unsafe_code)]`.
 [lints.rust]
 unsafe_code = "deny"
 

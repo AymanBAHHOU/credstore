@@ -3,7 +3,7 @@
 use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 /// Sensitive text. Zeroized on drop, never shown by `Debug`, has no `Display`.
 ///
@@ -20,6 +20,14 @@ impl SecretText {
     /// Borrow the plaintext. Keep the borrow short and never log it.
     pub fn expose(&self) -> &str {
         &self.0
+    }
+
+    /// Overwrite the contents with zeros now (also happens on drop). Returns the number
+    /// of bytes wiped.
+    pub fn wipe(&mut self) -> usize {
+        let n = self.0.len();
+        self.0.zeroize();
+        n
     }
 
     pub fn len(&self) -> usize {
@@ -64,5 +72,13 @@ mod tests {
         let s = SecretText::new("FAKE-SECRET-VALUE-12345".into());
         assert_eq!(format!("{s:?}"), "[REDACTED]");
         assert_eq!(format!("{:?}", Some(&s)), "Some([REDACTED])");
+    }
+
+    #[test]
+    fn wipe_clears_contents() {
+        let mut s = SecretText::new("FAKE-SECRET-VALUE-12345".into());
+        assert_eq!(s.wipe(), 23);
+        assert!(s.is_empty());
+        assert_eq!(s.expose(), "");
     }
 }

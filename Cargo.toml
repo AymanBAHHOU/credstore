@@ -6,6 +6,7 @@ members = [
     "crates/credstore-os",
     "crates/credstored",
     "crates/credstore",
+    "tests",
 ]
 
 [workspace.package]
@@ -18,19 +19,37 @@ publish = false
 credstore-proto = { path = "crates/credstore-proto" }
 credstore-core = { path = "crates/credstore-core" }
 credstore-os = { path = "crates/credstore-os" }
+credstored = { path = "crates/credstored" }
+credstore = { path = "crates/credstore" }
 
 age = "0.11"
 anyhow = "1"
 time = { version = "0.3", features = ["formatting"] }
 clap = { version = "4", features = ["derive"] }
 directories = "6"
+globset = "0.4"
+landlock = "0.4"
+nix = { version = "0.31", features = ["fs", "process", "resource", "signal", "user"] }
 rpassword = "7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 thiserror = "2"
 tokio = { version = "1", default-features = false }
 tracing = "0.1"
+toml = "1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
 zeroize = "1"
 
 # scrypt is very slow unoptimized; the vault's scrypt cost is fixed (not timing-based),

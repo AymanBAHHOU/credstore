@@ -16,19 +16,35 @@ use tokio::io::{AsyncRead, AsyncWrite};
 pub mod fs;
 mod paths;
 mod platform;
-mod stub;
+pub mod signals;
+mod sys;
 
-pub use paths::PlatformPaths;
+pub use paths::{PlatformPaths, CREDSTORE_HOME_ENV};
 pub use platform::Platform;
-pub use stub::{StubListener, StubStream};
 
 /// Name of the OS this build targets: `"linux"`, `"macos"` or `"windows"`.
 pub const OS_NAME: &str = std::env::consts::OS;
+
+/// Account the installed daemon runs as.
+#[cfg(target_os = "linux")]
+pub const SERVICE_USER: &str = "credstore";
+#[cfg(target_os = "macos")]
+pub const SERVICE_USER: &str = "_credstore";
+#[cfg(windows)]
+pub const SERVICE_USER: &str = r"NT SERVICE\credstore";
+
+/// Group allowed on the agent endpoint (installed mode).
+pub const AGENTS_GROUP: &str = "credstore-agents";
+/// Group allowed on the approver endpoint (installed mode).
+pub const APPROVERS_GROUP: &str = "credstore-approvers";
 
 #[derive(Debug, thiserror::Error)]
 pub enum OsError {
     #[error("unavailable: {0}")]
     Unavailable(String),
+    /// A peer or object failed an identity check.
+    #[error("denied: {0}")]
+    Denied(String),
     #[error("i/o error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -114,7 +130,13 @@ pub trait PeerIdentity {
 }
 
 /// A connected IPC stream.
-pub trait IpcStream: AsyncRead + AsyncWrite + PeerIdentity + Unpin + Send {}
+pub trait IpcStream: AsyncRead + AsyncWrite + PeerIdentity + Unpin + Send {
+    /// Check the peer against the endpoint's access rule and return its identity.
+    /// Errors with [`OsError::Denied`] if it is not allowed. Call it after reading the
+    /// first frame and before acting on it: on Windows the client identity is only known
+    /// once the client has written.
+    fn authorize(&self) -> OsResult<PeerInfo>;
+}
 
 pub trait IpcListener: Send {
     type Stream: IpcStream;
@@ -222,4 +244,6 @@ pub trait Terminal {
     /// No-echo prompt read from the controlling terminal, never from stdin, so a piped
     /// stdin cannot answer it.
     fn read_passphrase(&self, prompt: &str) -> OsResult<SecretText>;
+    /// One line of visible input from the controlling terminal (not stdin).
+    fn read_line(&self, prompt: &str) -> OsResult<String>;
 }

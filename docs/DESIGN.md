@@ -119,6 +119,65 @@ These settle gaps in the spec. They were confirmed by the human, not guessed.
 - The command logic (`credstore/src/commands.rs`) takes the prompt as a parameter, so
   tests script the answers without a terminal.
 
+## Daemon, endpoints and audit (M2)
+
+- **No `interprocess` crate.** tokio already provides Unix sockets with
+  `UnixStream::peer_cred()` (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED`/`getpeereid` on
+  macOS) and Windows named pipes. `interprocess` does not expose peer identity, which
+  credstore needs on every connection.
+- **The daemon is a library** (`credstored::start`) with a thin binary, so integration
+  tests run real daemons in-process on temp homes, in parallel.
+- **The CLI goes through the daemon** for every vault command, including `init` (new
+  approver operation `admin_init`: the proof's passphrase becomes the vault passphrase,
+  refused if a vault exists). So `credstored --dev` must be running for `credstore
+  --dev ...`.
+- **Peer check, Unix:** at accept time. Dev: peer UID must equal the daemon's. Installed:
+  the peer's user must be in the endpoint's group (primary group or member list). The
+  socket file is 0600 (dev) or 0660 with the group (installed), in a 0700 directory in
+  dev mode.
+- **Peer check, Windows:** the pipe ACL comes from SDDL: owner set to the daemon's SID;
+  dev grants only the daemon's user; installed grants the group read/write/attributes
+  but not `FILE_CREATE_PIPE_INSTANCE`, so a client can't create a rogue server instance.
+  `first_pipe_instance` refuses to start if the name is already taken, and remote clients
+  are refused. The client SID comes from briefly impersonating the client (Windows only
+  knows it after the client has written, so the daemon authorizes after the first frame
+  and before acting on it). Installed mode checks group membership with
+  `CheckTokenMembership`. A failed `RevertToSelf` aborts the process.
+- **Clients verify the daemon** before sending a passphrase: Unix checks the socket
+  file's owner and the peer UID (the daemon's UID in dev, the `credstore`/`_credstore`
+  user installed); Windows checks the pipe's owner SID (own SID in dev,
+  `NT SERVICE\credstore` installed). This stops an impostor that creates the endpoint
+  first from collecting passphrases.
+- **Every approver request carries a proof**, checked by decrypting the vault (about
+  0.5-1 s; scrypt runs on a blocking thread). Checks and vault writes are serialized,
+  so the rate limit counts attempts one at a time and concurrent `set`s can't lose
+  updates. Rate limit: 5 wrong passphrases, then 60 s lockout, doubling per lockout; a
+  correct passphrase resets it. During a lockout even the right passphrase is refused.
+- **Locked by default.** Admin operations (`set`, `rm`, `status`) do not unlock the vault;
+  only `unlock` and (M4) approvals do. `lock` wipes every value (`VaultContents::wipe`
+  zeroizes each one in place) and the audit `lock` record says how many were wiped, which
+  is how the integration test checks zeroization without reading freed memory.
+- **Audit log:** canonical JSON (keys sorted recursively, no whitespace) so the hash does
+  not depend on serde_json map ordering. Each record is fsynced. On open, the chain
+  continues from the last complete record; a partial last line (crash) is left in place
+  and reported by `verify`. Trailing records removed from the end can't be detected by
+  the chain alone; the append-only attribute (installed mode, M7) covers that.
+- **Extra audit events** (not in spec 5.3): `auth_failed` (wrong passphrase, with
+  peer), `daemon_started`, `daemon_stopped`. Connections are logged with `tracing`
+  (uid/sid, pid, exe) rather than as audit records, to keep the audit log to decisions.
+- **Memory hardening:** Linux `PR_SET_DUMPABLE=0` and `RLIMIT_CORE=0`; macOS
+  `PT_DENY_ATTACH` and `RLIMIT_CORE=0`; Windows a protected process DACL. **mlock /
+  VirtualLock are not applied** and are reported as unavailable: values are many small
+  heap allocations, and `mlockall` would make the 256 MiB scrypt allocation fail under
+  the default memlock limit. Mitigation: encrypted swap / page file.
+- **Windows process DACL:** SYSTEM full; Owner Rights and the daemon's user get only
+  query, query-limited, synchronize and terminate. No memory read/write, handle
+  duplication or DACL change. Terminate is allowed so a user can always stop their dev
+  daemon (`taskkill`, Task Manager, Ctrl-C). PowerShell's `Stop-Process` asks for full
+  access and is refused; use `taskkill /PID <pid> /F`.
+- **WER:** crash dialogs are turned off with `SetErrorMode`; a machine-wide LocalDumps
+  policy could still write a dump, so this is reported as partial.
+
 ## Stubbed per OS
 
 | Capability      | Linux                 | macOS                 | Windows               |
@@ -127,9 +186,10 @@ These settle gaps in the spec. They were confirmed by the human, not guessed.
 | Private files   | done (0600/0700)      | done (0600/0700)      | stub, M7 (inherits folder ACL) |
 | Atomic replace  | done                  | done                  | done                  |
 | Terminal prompt | done (`rpassword`)    | done (`rpassword`)    | done (`rpassword`)    |
-| IPC             | stub, M2              | stub, M2              | stub, M2              |
-| Peer identity   | stub, M2              | stub, M2              | stub, M2              |
-| Memory guard    | stub, M2              | stub, M2              | stub, M2              |
+| IPC             | done (Unix socket)    | done (Unix socket), CI only | done (named pipe) |
+| Peer identity   | done (uid, pid, exe)  | done (uid, pid; no exe) | done (SID, pid, exe) |
+| Group check     | done, untested (needs install) | done, untested | done, untested |
+| Memory guard    | dumpable, core limit; no mlock | deny-attach, core limit; no mlock | DACL; WER partial; no VirtualLock |
 | Sandbox         | stub, M5              | stub, M5              | stub, M5              |
 | Service install | stub, M7              | stub, M7              | stub, M7              |
 

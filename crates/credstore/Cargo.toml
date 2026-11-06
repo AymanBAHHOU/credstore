@@ -6,12 +6,22 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "credstore"
+path = "src/main.rs"
+
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
 credstore-core.workspace = true
 credstore-os.workspace = true
 credstore-proto.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "rt", "time"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 

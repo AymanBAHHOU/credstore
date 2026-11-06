@@ -1,14 +1,14 @@
 //! The platform implementation for the OS this build targets.
-//!
-//! M0: every capability except paths and the passphrase terminal is a stub that returns
-//! `Unavailable` with the milestone that will build it. `docs/DESIGN.md` lists them.
+
+use std::io::{BufRead, Write};
 
 use credstore_proto::SecretText;
 
+use crate::sys::current as sys;
 use crate::{
-    Endpoint, EndpointAccess, EndpointKind, FeatureStatus, HardeningItem, Ipc, MemoryGuard, Mode,
-    OsError, OsResult, Paths, PlatformPaths, Sandbox, SandboxCapabilities, SandboxPlan,
-    SandboxSpec, ServiceInstall, ServiceStatus, StubListener, StubStream, Terminal,
+    Endpoint, EndpointAccess, EndpointKind, HardeningItem, Ipc, MemoryGuard, Mode, OsError,
+    OsResult, Paths, PlatformPaths, Sandbox, SandboxCapabilities, SandboxPlan, SandboxSpec,
+    ServiceInstall, ServiceStatus, Terminal,
 };
 
 /// Platform services for the current OS.
@@ -54,13 +54,27 @@ impl Paths for Platform {
     }
 }
 
-/// Mechanism name for this OS, used in "not built yet" messages.
-#[cfg(target_os = "linux")]
-const IPC_NAME: &str = "Unix sockets";
-#[cfg(target_os = "macos")]
-const IPC_NAME: &str = "Unix sockets";
+#[cfg(unix)]
+type SysListener = crate::sys::unix::ipc::UnixIpcListener;
+#[cfg(unix)]
+type SysStream = crate::sys::unix::ipc::UnixIpcStream;
 #[cfg(windows)]
-const IPC_NAME: &str = "named pipes";
+type SysListener = crate::sys::windows::ipc::PipeListener;
+#[cfg(windows)]
+type SysStream = crate::sys::windows::ipc::PipeStream;
+
+impl Ipc for Platform {
+    type Listener = SysListener;
+    type Stream = SysStream;
+
+    async fn bind(&self, endpoint: &Endpoint, access: &EndpointAccess) -> OsResult<SysListener> {
+        sys::ipc::bind(endpoint, access).await
+    }
+
+    async fn connect(&self, endpoint: &Endpoint) -> OsResult<SysStream> {
+        sys::ipc::connect(endpoint, self.mode()).await
+    }
+}
 
 #[cfg(target_os = "linux")]
 const SANDBOX_NAME: &str = "bubblewrap / landlock";
@@ -68,34 +82,6 @@ const SANDBOX_NAME: &str = "bubblewrap / landlock";
 const SANDBOX_NAME: &str = "Seatbelt (sandbox-exec)";
 #[cfg(windows)]
 const SANDBOX_NAME: &str = "Job Object + restricted token";
-
-#[cfg(target_os = "linux")]
-const HARDENING: &[&str] = &["PR_SET_DUMPABLE=0", "RLIMIT_CORE=0", "mlock"];
-#[cfg(target_os = "macos")]
-const HARDENING: &[&str] = &["PT_DENY_ATTACH", "RLIMIT_CORE=0", "mlock"];
-#[cfg(windows)]
-const HARDENING: &[&str] = &[
-    "process DACL denying VM read/write/dup-handle",
-    "WER dumps disabled",
-    "VirtualLock",
-];
-
-impl Ipc for Platform {
-    type Listener = StubListener;
-    type Stream = StubStream;
-
-    async fn bind(&self, _: &Endpoint, _: &EndpointAccess) -> OsResult<StubListener> {
-        Err(OsError::unavailable(format!(
-            "{IPC_NAME} not built yet (M2)"
-        )))
-    }
-
-    async fn connect(&self, _: &Endpoint) -> OsResult<StubStream> {
-        Err(OsError::unavailable(format!(
-            "{IPC_NAME} not built yet (M2)"
-        )))
-    }
-}
 
 impl Sandbox for Platform {
     fn capabilities(&self) -> OsResult<SandboxCapabilities> {
@@ -119,17 +105,13 @@ impl Sandbox for Platform {
 
 impl MemoryGuard for Platform {
     fn harden_process(&self) -> Vec<HardeningItem> {
-        HARDENING
-            .iter()
-            .map(|name| HardeningItem {
-                name,
-                status: FeatureStatus::Unavailable("not built yet (M2)".into()),
-            })
-            .collect()
+        sys::harden_process()
     }
 
     fn lock_memory(&self, _: &mut [u8]) -> OsResult<()> {
-        Err(OsError::unavailable("memory locking not built yet (M2)"))
+        Err(OsError::unavailable(
+            "per-buffer memory locking is not applied (see docs/DESIGN.md)",
+        ))
     }
 }
 
@@ -141,35 +123,51 @@ impl ServiceInstall for Platform {
 
 impl Terminal for Platform {
     fn has_terminal(&self) -> bool {
-        controlling_terminal_opens()
+        open_terminal().is_ok()
     }
 
     fn read_passphrase(&self, prompt: &str) -> OsResult<SecretText> {
-        if !controlling_terminal_opens() {
+        if !self.has_terminal() {
             return Err(OsError::unavailable("no controlling terminal"));
         }
         // rpassword reads /dev/tty on Unix and the console (CONIN$) on Windows, not stdin.
         let value = rpassword::prompt_password(prompt)?;
         Ok(SecretText::new(value))
     }
+
+    fn read_line(&self, prompt: &str) -> OsResult<String> {
+        let (input, mut output) = open_terminal()?;
+        output.write_all(prompt.as_bytes())?;
+        output.flush()?;
+        let mut line = String::new();
+        std::io::BufReader::new(input).read_line(&mut line)?;
+        Ok(line.trim_end_matches(['\r', '\n']).to_owned())
+    }
 }
 
+/// The controlling terminal as (input, output), never stdin/stdout.
 #[cfg(unix)]
-fn controlling_terminal_opens() -> bool {
-    std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/tty")
-        .is_ok()
+fn open_terminal() -> OsResult<(std::fs::File, std::fs::File)> {
+    let open = || {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/tty")
+    };
+    Ok((open()?, open()?))
 }
 
 #[cfg(windows)]
-fn controlling_terminal_opens() -> bool {
-    std::fs::OpenOptions::new()
+fn open_terminal() -> OsResult<(std::fs::File, std::fs::File)> {
+    let input = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .open("CONIN$")
-        .is_ok()
+        .open("CONIN$")?;
+    let output = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("CONOUT$")?;
+    Ok((input, output))
 }
 
 #[cfg(test)]
@@ -182,28 +180,12 @@ mod tests {
         ))
     }
 
-    #[tokio::test]
-    async fn unbuilt_features_report_unavailable() {
+    #[test]
+    fn unbuilt_features_report_unavailable() {
         let p = platform();
-        let ep = p.endpoint(EndpointKind::Agent);
-        assert!(p
-            .bind(&ep, &EndpointAccess::SameUser)
-            .await
-            .unwrap_err()
-            .is_unavailable());
-        assert!(p.connect(&ep).await.unwrap_err().is_unavailable());
         assert!(p.capabilities().unwrap_err().is_unavailable());
         assert!(p.attach(1).unwrap_err().is_unavailable());
         assert!(p.service_status().unwrap_err().is_unavailable());
         assert!(p.lock_memory(&mut [0u8; 4]).unwrap_err().is_unavailable());
-    }
-
-    #[test]
-    fn hardening_reports_every_feature() {
-        let items = platform().harden_process();
-        assert_eq!(items.len(), HARDENING.len());
-        assert!(items
-            .iter()
-            .all(|i| matches!(i.status, FeatureStatus::Unavailable(_))));
     }
 }

@@ -96,6 +96,9 @@ pub enum ApproverOp {
     Deny {
         request_id: RequestId,
     },
+    /// Create the vault; the proof's passphrase becomes the vault passphrase. Refused
+    /// if a vault already exists.
+    AdminInit,
     Unlock,
     Lock,
     Status,

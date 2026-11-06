@@ -6,12 +6,11 @@
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use credstore_core::vault::Vault;
+use credstore::client::Client;
+use credstore::commands::{self, Prompt};
 use credstore_os::{Mode, Paths, Platform, Terminal};
 use credstore_proto::SecretText;
 use tracing_subscriber::EnvFilter;
-
-mod commands;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -81,56 +80,64 @@ enum AuditAction {
 fn main() -> ExitCode {
     init_tracing();
     let cli = Cli::parse();
-    tracing::debug!(dev = cli.dev, "credstore starting");
-
-    let milestone = match &cli.command {
-        Command::Init | Command::Set { .. } | Command::List | Command::Rm { .. } => {
-            return match vault_command(&cli) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(e) => {
-                    eprintln!("credstore: error: {e:#}");
-                    ExitCode::FAILURE
-                }
-            };
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("credstore: error: {e}");
+            return ExitCode::FAILURE;
         }
-        Command::Audit { .. } | Command::Status | Command::Lock => "M2",
-        Command::Reload => "M3",
-        Command::Watch => "M4",
-        Command::Run { .. } => "M5",
-        Command::Mcp => "M6",
-        Command::Doctor => "M7",
     };
-    eprintln!("credstore: this command is not built yet ({milestone}).");
-    ExitCode::from(2)
+    match rt.block_on(run(cli)) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("credstore: error: {e:#}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
-/// `init`, `set`, `list`, `rm` against the dev-mode vault (M1: no daemon yet).
-fn vault_command(cli: &Cli) -> anyhow::Result<()> {
-    if !cli.dev {
-        anyhow::bail!(
-            "installed mode needs the daemon, which is not built yet (M2). \
-             Use --dev to work on the dev-mode vault."
-        );
-    }
-    let platform = Platform::new(Mode::Dev)?;
-    let vault = Vault::new(platform.vault_file(), platform.index_file());
+async fn run(cli: Cli) -> anyhow::Result<()> {
+    let mode = if cli.dev { Mode::Dev } else { Mode::Installed };
+    let platform = Platform::new(mode)?;
+    let client = Client::new(platform.clone());
     let prompt = TerminalPrompt(&platform);
     let mut msg = std::io::stderr();
-    match &cli.command {
-        Command::Init => commands::init(&vault, &prompt, &mut msg),
+    let mut out = std::io::stdout();
+    match cli.command {
+        Command::Init => commands::init(&client, &prompt, &mut msg).await,
         Command::Set { name, description } => {
-            commands::set(&vault, name, description.clone(), &prompt, &mut msg)
+            commands::set(&client, &name, description, &prompt, &mut msg).await
         }
-        Command::List => commands::list(&vault, &mut std::io::stdout(), &mut msg),
-        Command::Rm { name } => commands::rm(&vault, name, &prompt, &mut msg),
-        _ => unreachable!("not a vault command"),
+        Command::List => commands::list(&client, &mut out, &mut msg).await,
+        Command::Rm { name } => commands::rm(&client, &name, &prompt, &mut msg).await,
+        Command::Lock => commands::lock(&client, &prompt, &mut msg).await,
+        Command::Status => commands::status(&client, &prompt, &mut out).await,
+        Command::Reload => commands::reload(&client, &prompt, &mut msg).await,
+        Command::Audit { follow, action } => match (action, follow) {
+            (Some(AuditAction::Verify), _) => {
+                commands::audit_verify(platform.audit_log(), &mut out)
+            }
+            (None, true) => commands::audit_follow(platform.audit_log(), &mut out),
+            (None, false) => commands::audit_show(platform.audit_log(), &mut out),
+        },
+        Command::Watch => not_built("M4"),
+        Command::Run { .. } => not_built("M5"),
+        Command::Mcp => not_built("M6"),
+        Command::Doctor => not_built("M7"),
     }
+}
+
+fn not_built(milestone: &str) -> anyhow::Result<()> {
+    anyhow::bail!("this command is not built yet ({milestone})")
 }
 
 /// Reads hidden input from the controlling terminal, never from stdin.
 struct TerminalPrompt<'a>(&'a Platform);
 
-impl commands::Prompt for TerminalPrompt<'_> {
+impl Prompt for TerminalPrompt<'_> {
     fn secret(&self, prompt: &str) -> anyhow::Result<SecretText> {
         if !self.0.has_terminal() {
             anyhow::bail!("this command needs a terminal to read hidden input");

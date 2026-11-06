@@ -2,10 +2,7 @@
 
 use anyhow::Context;
 use clap::Parser;
-use credstore_os::{
-    EndpointAccess, EndpointKind, FeatureStatus, Ipc, MemoryGuard, Mode, Paths, Platform,
-    DEV_MODE_WARNING,
-};
+use credstore_os::{FeatureStatus, MemoryGuard, Mode, Platform, DEV_MODE_WARNING};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
@@ -28,13 +25,6 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let platform = Platform::new(mode).context("resolving credstore paths")?;
-    tracing::info!(
-        os = credstore_os::OS_NAME,
-        ?mode,
-        data_dir = %platform.data_dir().display(),
-        "starting credstored"
-    );
-
     for item in platform.harden_process() {
         match &item.status {
             FeatureStatus::Active => tracing::info!(feature = item.name, "hardening active"),
@@ -44,15 +34,19 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let access = match mode {
-        Mode::Dev => EndpointAccess::SameUser,
-        Mode::Installed => EndpointAccess::Group("credstore-agents".into()),
-    };
-    let endpoint = platform.endpoint(EndpointKind::Agent);
-    platform
-        .bind(&endpoint, &access)
-        .await
-        .with_context(|| format!("binding agent endpoint {}", endpoint.address))?;
+    let daemon = credstored::start(credstored::DaemonConfig {
+        paths: platform.paths().clone(),
+    })
+    .await?;
+    tracing::info!(
+        os = credstore_os::OS_NAME,
+        ?mode,
+        "credstored ready (vault locked)"
+    );
+
+    credstore_os::signals::terminate().await;
+    tracing::info!("shutting down");
+    daemon.shutdown().await;
     Ok(())
 }
 
