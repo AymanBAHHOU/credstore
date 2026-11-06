@@ -13,9 +13,20 @@ use credstore_proto::{AgentRequest, ApproverOp, Response, SecretText};
 
 use crate::client::{expect_ok, expect_status, response_error, Client};
 
-/// Source of hidden input. The binary reads the controlling terminal; tests script it.
+/// Source of input. The binary reads the controlling terminal (never stdin); tests
+/// script it.
 pub trait Prompt {
+    /// Hidden input.
     fn secret(&self, prompt: &str) -> anyhow::Result<SecretText>;
+    /// Visible input.
+    fn line(&self, prompt: &str) -> anyhow::Result<String> {
+        let _ = prompt;
+        bail!("no terminal input available")
+    }
+    /// Whether there is a terminal to read from.
+    fn has_terminal(&self) -> bool {
+        true
+    }
 }
 
 pub async fn init(client: &Client, p: &dyn Prompt, msg: &mut dyn Write) -> anyhow::Result<()> {

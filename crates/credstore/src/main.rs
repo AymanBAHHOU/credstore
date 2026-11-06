@@ -123,7 +123,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             (None, true) => commands::audit_follow(platform.audit_log(), &mut out),
             (None, false) => commands::audit_show(platform.audit_log(), &mut out),
         },
-        Command::Watch => not_built("M4"),
+        Command::Watch => credstore::watch::watch(&client, &prompt, &mut out).await,
         Command::Run { .. } => not_built("M5"),
         Command::Mcp => not_built("M6"),
         Command::Doctor => not_built("M7"),
@@ -143,6 +143,14 @@ impl Prompt for TerminalPrompt<'_> {
             anyhow::bail!("this command needs a terminal to read hidden input");
         }
         Ok(self.0.read_passphrase(prompt)?)
+    }
+
+    fn line(&self, prompt: &str) -> anyhow::Result<String> {
+        Ok(self.0.read_line(prompt)?)
+    }
+
+    fn has_terminal(&self) -> bool {
+        self.0.has_terminal()
     }
 }
 

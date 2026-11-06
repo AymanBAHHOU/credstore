@@ -10,7 +10,10 @@ use std::path::{Path, PathBuf};
 use credstore::client::Client;
 use credstore::commands::Prompt;
 use credstore_os::{EndpointKind, Ipc, Paths, Platform, PlatformPaths};
-use credstore_proto::{AgentRequest, ApproverOp, Response, RunRequest, SecretText, MAX_FRAME_LEN};
+use credstore_proto::{
+    read_message, write_message, AgentRequest, ApproverOp, ApproverRequest, GrantScope,
+    PendingRequest, Proof, Response, RunRequest, SecretText, MAX_FRAME_LEN,
+};
 use credstored::{DaemonConfig, RunningDaemon};
 
 /// The fake secret every adversarial test uses (spec section 10).
@@ -142,6 +145,68 @@ impl TestDaemon {
         self.client().agent(&AgentRequest::Run(req)).await.unwrap()
     }
 
+    /// Current pending requests (one subscription round trip).
+    pub async fn pending(&self) -> Vec<PendingRequest> {
+        let mut s = self.connect(EndpointKind::Approver).await;
+        write_message(
+            &mut s,
+            &ApproverRequest {
+                proof: Proof { passphrase: pass() },
+                op: ApproverOp::SubscribePending,
+            },
+        )
+        .await
+        .unwrap();
+        match read_message::<Response, _>(&mut s).await.unwrap() {
+            Response::Pending { requests } => requests,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Wait until exactly `n` requests are pending.
+    pub async fn wait_pending(&self, n: usize) {
+        for _ in 0..200 {
+            if self.daemon().pending_count() == n {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        panic!(
+            "expected {n} pending requests, have {}",
+            self.daemon().pending_count()
+        );
+    }
+
+    /// Send `op` for the only pending request once it shows up.
+    pub async fn decide_only(
+        &self,
+        op: impl FnOnce(credstore_proto::RequestId) -> ApproverOp,
+    ) -> Response {
+        self.wait_pending(1).await;
+        let id = self.pending().await.pop().unwrap().id;
+        self.client().approver(op(id), pass()).await.unwrap()
+    }
+
+    /// Run `req`, deny it when it reaches the human, and return what the agent got.
+    pub async fn run_and_deny(&self, req: RunRequest) -> Response {
+        let (r, d) = tokio::join!(
+            self.run(req),
+            self.decide_only(|request_id| ApproverOp::Deny { request_id })
+        );
+        assert!(matches!(d, Response::Ok), "{d:?}");
+        r
+    }
+
+    /// Run `req`, approve it with `scope`, and return what the agent got.
+    pub async fn run_and_approve(&self, req: RunRequest, scope: GrantScope) -> Response {
+        let (r, d) = tokio::join!(
+            self.run(req),
+            self.decide_only(|request_id| ApproverOp::Approve { request_id, scope })
+        );
+        assert!(matches!(d, Response::Ok), "{d:?}");
+        r
+    }
+
     /// Raw connection to an endpoint.
     pub async fn connect(&self, kind: EndpointKind) -> <Platform as Ipc>::Stream {
         self.platform
@@ -218,6 +283,13 @@ impl Prompt for Scripted {
             .map(SecretText::new)
             .ok_or_else(|| anyhow::anyhow!("unexpected prompt"))
     }
+
+    fn line(&self, _: &str) -> anyhow::Result<String> {
+        self.0
+            .borrow_mut()
+            .pop_front()
+            .ok_or_else(|| anyhow::anyhow!("unexpected prompt"))
+    }
 }
 
 /// Just over the frame limit.
@@ -243,6 +315,14 @@ pub fn run_request(argv: &[&str], secrets: &[&str], cwd: &Path) -> RunRequest {
         timeout_secs: None,
         injection: None,
     }
+}
+
+/// What the agent gets once a request is approved, until the runner exists (M5).
+pub const APPROVED_NOT_RUN: &str = "approved, but running commands is not built yet";
+
+/// True if the request was approved (and, until M5, not run).
+pub fn approved(r: &Response) -> bool {
+    matches!(r, Response::Error { message, .. } if message == APPROVED_NOT_RUN)
 }
 
 /// The denial text, or panic.

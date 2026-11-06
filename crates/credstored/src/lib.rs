@@ -11,6 +11,7 @@ use serde_json::json;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
+mod approvals;
 mod run;
 mod server;
 mod state;
@@ -114,6 +115,7 @@ impl RunningDaemon {
         for t in self.tasks {
             let _ = t.await;
         }
+        self.state.cancel_pending();
         self.state.relock("shutdown");
         let _ = self.state.audit("daemon_stopped", None, json!({}));
     }
@@ -121,6 +123,11 @@ impl RunningDaemon {
     /// Whether the vault is currently unlocked in memory.
     pub fn is_unlocked(&self) -> bool {
         self.state.is_unlocked()
+    }
+
+    /// Requests waiting for the human.
+    pub fn pending_count(&self) -> usize {
+        self.state.pending_count()
     }
 
     /// Set the idle relock time (normally from policy).

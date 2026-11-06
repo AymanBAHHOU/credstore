@@ -5,9 +5,10 @@ use std::time::Duration;
 
 use credstore_os::{Ipc, IpcListener, IpcStream, OsError};
 use credstore_proto::{
-    decode, read_frame, write_message, AgentRequest, ApproverRequest, ErrorCode, FrameError,
-    PeerInfo,
+    decode, read_frame, write_message, AgentRequest, ApproverOp, ApproverRequest, ErrorCode,
+    FrameError, PeerInfo, Response,
 };
+use tokio::io::AsyncReadExt;
 use tokio::sync::watch;
 
 use crate::state::{error, State};
@@ -36,7 +37,8 @@ pub(crate) async fn accept_loop<L>(
         match accepted {
             Ok(stream) => {
                 let state = state.clone();
-                tokio::spawn(async move { serve(state, stream, which).await });
+                let shutdown = shutdown.clone();
+                tokio::spawn(async move { serve(state, stream, which, shutdown).await });
             }
             Err(OsError::Denied(reason)) => {
                 tracing::warn!(endpoint = ?which, %reason, "connection refused");
@@ -50,7 +52,12 @@ pub(crate) async fn accept_loop<L>(
 }
 
 /// One connection: read frames, authorize the peer after the first frame, answer.
-async fn serve<S: IpcStream>(state: Arc<State>, mut stream: S, which: Endpoint) {
+async fn serve<S: IpcStream>(
+    state: Arc<State>,
+    mut stream: S,
+    which: Endpoint,
+    shutdown: watch::Receiver<bool>,
+) {
     let mut peer: Option<PeerInfo> = None;
     loop {
         let payload = match read_frame(&mut stream).await {
@@ -88,6 +95,16 @@ async fn serve<S: IpcStream>(state: Arc<State>, mut stream: S, which: Endpoint) 
                 Err(e) => error(ErrorCode::BadRequest, e.to_string()),
             },
             Endpoint::Approver => match decode::<ApproverRequest>(&payload) {
+                Ok(req) if matches!(req.op, ApproverOp::SubscribePending) => {
+                    drop(payload);
+                    match state.verify(&req.proof, &who).await {
+                        Ok(()) => subscription(&state, &mut stream, shutdown).await,
+                        Err(resp) => {
+                            let _ = write_message(&mut stream, &resp).await;
+                        }
+                    }
+                    return;
+                }
                 Ok(req) => state.approver(req, &who).await,
                 // Includes requests without a proof, which cannot parse.
                 Err(e) => error(ErrorCode::Unauthorized, format!("rejected: {e}")),
@@ -96,6 +113,31 @@ async fn serve<S: IpcStream>(state: Arc<State>, mut stream: S, which: Endpoint) 
         drop(payload);
         if write_message(&mut stream, &response).await.is_err() {
             return;
+        }
+    }
+}
+
+/// Send the pending list now and after every change, until the client closes the
+/// connection (or sends anything) or the daemon shuts down.
+async fn subscription<S: IpcStream>(
+    state: &State,
+    stream: &mut S,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let mut changes = state.subscribe();
+    loop {
+        changes.mark_unchanged();
+        let list = Response::Pending {
+            requests: state.pending_list(),
+        };
+        if write_message(stream, &list).await.is_err() {
+            return;
+        }
+        let mut b = [0u8; 1];
+        tokio::select! {
+            _ = stream.read(&mut b) => return,
+            _ = shutdown.changed() => return,
+            r = changes.changed() => if r.is_err() { return },
         }
     }
 }

@@ -325,6 +325,7 @@ dependencies = [
  "credstore-core",
  "credstore-os",
  "credstore-proto",
+ "credstored",
  "serde",
  "serde_json",
  "tokio",

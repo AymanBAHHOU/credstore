@@ -172,11 +172,19 @@ pub struct PendingRequest {
     pub argv: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell: Option<String>,
+    /// Full path of the program that will run (argv form).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program: Option<String>,
     pub cwd: String,
     pub secrets: Vec<SecretInfo>,
     pub injection: Injection,
     pub sandbox: SandboxMode,
     pub network: NetworkPolicy,
+    /// Hosts allowed when `network` is `allow-list`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_hosts: Vec<String>,
+    /// Longest "approve for this session" policy allows; 0 = once only.
+    pub max_grant_secs: u64,
     pub peer: PeerInfo,
 }
 

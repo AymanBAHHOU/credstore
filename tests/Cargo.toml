@@ -17,6 +17,10 @@ path = "m2_daemon.rs"
 name = "m3_policy"
 path = "m3_policy.rs"
 
+[[test]]
+name = "m4_approvals"
+path = "m4_approvals.rs"
+
 [dependencies]
 anyhow.workspace = true
 credstore.workspace = true

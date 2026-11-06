@@ -6,8 +6,6 @@ use credstore_os::Paths;
 use credstore_proto::{ApproverOp, ErrorCode, Response};
 use credstore_tests::*;
 
-const PENDING_M4: &str = "approvals are not built yet";
-
 async fn ready(tag: &str) -> TestDaemon {
     let d = TestDaemon::start(tag).await;
     d.init_vault().await;
@@ -37,13 +35,13 @@ async fn init_writes_a_starter_policy_that_allows_with_approval() {
     assert_eq!(status.policy_error, None);
 
     let r = d
-        .run(run_request(
+        .run_and_deny(run_request(
             &[harmless_program(), "hi"],
             &["API_KEY"],
             &cwd(&d),
         ))
         .await;
-    assert!(denial(&r).contains(PENDING_M4), "{r:?}");
+    assert_eq!(denial(&r), "denied by the human");
     assert!(d.records("policy_denied").is_empty());
     let req = d.records("request").pop().expect("request audited");
     assert_eq!(req["secrets"][0], "API_KEY");
@@ -68,9 +66,9 @@ allow_dirs = ["{allowed_dir}"]
 
     // Allowed: right program, right dir.
     let r = d
-        .run(run_request(&[harmless_program(), "x"], &["API_KEY"], &dir))
+        .run_and_deny(run_request(&[harmless_program(), "x"], &["API_KEY"], &dir))
         .await;
-    assert!(denial(&r).contains(PENDING_M4), "{r:?}");
+    assert_eq!(denial(&r), "denied by the human");
 
     // Wrong command.
     let other = if cfg!(windows) { "whoami" } else { "ls" };
@@ -137,9 +135,9 @@ async fn strict_mode_denies_secrets_without_a_block() {
         .await;
     assert!(denial(&r).contains("policy is strict"), "{r:?}");
     let r = d
-        .run(run_request(&[harmless_program()], &["API_KEY"], &dir))
+        .run_and_deny(run_request(&[harmless_program()], &["API_KEY"], &dir))
         .await;
-    assert!(denial(&r).contains(PENDING_M4), "{r:?}");
+    assert_eq!(denial(&r), "denied by the human");
     d.stop().await;
 }
 
@@ -181,9 +179,9 @@ async fn missing_or_broken_policy_fails_closed() {
     d.write_policy("");
     assert!(matches!(d.reload().await, Response::Ok));
     let r = d
-        .run(run_request(&[harmless_program()], &["API_KEY"], &dir))
+        .run_and_deny(run_request(&[harmless_program()], &["API_KEY"], &dir))
         .await;
-    assert!(denial(&r).contains(PENDING_M4), "{r:?}");
+    assert_eq!(denial(&r), "denied by the human");
 
     let reloads = d.records("config_reloaded");
     assert!(reloads.iter().any(|r| r["ok"] == false));

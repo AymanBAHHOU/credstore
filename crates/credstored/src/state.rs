@@ -6,6 +6,9 @@ use std::time::{Duration, Instant};
 
 use credstore_core::audit::AuditLog;
 use credstore_core::policy::Policy;
+
+use crate::approvals::{Approvals, Values};
+use crate::run::Prepared;
 use credstore_core::vault::{Vault, VaultContents, VaultError};
 use credstore_os::{exec, Mode, Paths, Platform};
 use credstore_proto::{
@@ -25,18 +28,21 @@ pub(crate) struct State {
     /// Serializes passphrase checks and vault writes (no lost updates, and the rate
     /// limit counts attempts one at a time).
     vault_ops: tokio::sync::Mutex<()>,
-    unlocked: Mutex<Option<Unlocked>>,
+    pub(crate) unlocked: Mutex<Option<Unlocked>>,
     limiter: Mutex<RateLimiter>,
     pub idle_ttl: Mutex<Duration>,
     /// Loaded policy, or why it could not be loaded (then every run is denied).
     pub(crate) policy: Mutex<Result<Arc<Policy>, String>>,
     /// Where bare program names are looked up.
     pub(crate) search_path: Vec<PathBuf>,
+    pub(crate) approvals: Mutex<Approvals>,
+    /// Bumped whenever the pending list changes; `watch` subscribers wait on it.
+    pub(crate) pending_version: tokio::sync::watch::Sender<u64>,
 }
 
-struct Unlocked {
-    contents: VaultContents,
-    last_used: Instant,
+pub(crate) struct Unlocked {
+    pub contents: VaultContents,
+    pub last_used: Instant,
 }
 
 impl Drop for Unlocked {
@@ -114,6 +120,8 @@ impl State {
             idle_ttl: Mutex::new(Duration::from_secs(600)),
             policy: Mutex::new(Err("not loaded yet".into())),
             search_path: exec::search_path(),
+            approvals: Mutex::new(Approvals::default()),
+            pending_version: tokio::sync::watch::channel(0).0,
         }
     }
 
@@ -157,6 +165,7 @@ impl State {
     /// Wipe the in-memory vault. Returns how many values were zeroized, if it was
     /// unlocked.
     pub fn relock(&self, reason: &str) -> Option<usize> {
+        self.clear_grants();
         let taken = self
             .unlocked
             .lock()
@@ -244,12 +253,16 @@ impl State {
                 Err(VaultError::Missing(_)) => Response::Secrets { secrets: vec![] },
                 Err(e) => error(ErrorCode::Internal, e.to_string()),
             },
-            AgentRequest::Run(req) => match self.prepare_run(req, peer).await {
-                Ok(_prepared) => Response::Denied {
-                    reason: "policy allows this request, but approvals are not built yet".into(),
-                },
-                Err(resp) => resp,
-            },
+            AgentRequest::Run(req) => {
+                let prepared = match self.prepare_run(req, peer).await {
+                    Ok(p) => p,
+                    Err(resp) => return resp,
+                };
+                match self.authorize_run(&prepared, peer).await {
+                    Ok(values) => self.execute(prepared, values).await,
+                    Err(resp) => resp,
+                }
+            }
         }
     }
 
@@ -284,7 +297,7 @@ impl State {
             ApproverOp::Status => Response::Status(StatusInfo {
                 locked: !self.is_unlocked(),
                 dev_mode: self.mode() == Mode::Dev,
-                pending: 0,
+                pending: u32::try_from(self.pending_count()).unwrap_or(u32::MAX),
                 policy_error: self.policy().err(),
             }),
             ApproverOp::AdminSet {
@@ -312,11 +325,37 @@ impl State {
                     format!("policy not loaded, so every run is denied until it is fixed: {e}"),
                 ),
             },
-            ApproverOp::SubscribePending
-            | ApproverOp::Approve { .. }
-            | ApproverOp::Deny { .. }
-            | ApproverOp::AdminRun(_) => error(ErrorCode::Unsupported, "not built yet"),
+            ApproverOp::Approve { request_id, scope } => {
+                self.approve(&request_id, scope, contents, peer)
+            }
+            ApproverOp::Deny { request_id } => {
+                drop(contents);
+                self.deny(&request_id, peer)
+            }
+            // Streamed by the server after `verify`.
+            ApproverOp::SubscribePending => error(ErrorCode::BadRequest, "subscribe is streamed"),
+            ApproverOp::AdminRun(_) => error(ErrorCode::Unsupported, "not built yet"),
         }
+    }
+
+    /// Check a proof on its own (for streaming operations).
+    pub async fn verify(&self, proof: &Proof, peer: &PeerInfo) -> Result<(), Response> {
+        let _ops = self.vault_ops.lock().await;
+        self.verify_proof(proof, peer).await.map(drop)
+    }
+
+    /// Step 7. Until the runner exists (M5) the approved values are dropped (zeroized).
+    pub async fn execute(&self, prepared: Prepared, values: Values) -> Response {
+        drop(values);
+        let idle = *self.idle_ttl.lock().unwrap_or_else(|p| p.into_inner());
+        if idle.is_zero() {
+            self.relock("after-run");
+        }
+        let _ = prepared;
+        error(
+            ErrorCode::Unsupported,
+            "approved, but running commands is not built yet",
+        )
     }
 
     async fn admin_init(&self, proof: &Proof, peer: &PeerInfo) -> Response {

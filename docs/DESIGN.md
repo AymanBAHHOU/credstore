@@ -242,8 +242,51 @@ These settle gaps in the spec. They were confirmed by the human, not guessed.
 - **Audit:** `request` (peer, secrets, argv or shell, resolved program, cwd, reason,
   injection) for every well-formed request, then `policy_denied` with `denial` when
   policy refuses it. Malformed requests are refused without an audit record.
-- **Until M4,** a request that passes policy is answered with a denial saying approvals
-  are not built yet.
+
+## Approvals and `watch` (M4)
+
+- **Pending queue** in the daemon, keyed by request id. Subscribers (`watch`) hold one
+  approver connection open (`subscribe_pending`, with a passphrase proof); the daemon
+  sends the full pending list at once and after every change. Sending anything on that
+  connection, closing it, or daemon shutdown ends the subscription.
+- **Every approve or deny is a separate approver request with a fresh passphrase
+  proof** (decision 2), checked by decrypting the vault. A wrong passphrase counts
+  toward the rate limit and the request stays pending. Approvals are by id, so they
+  never apply to a different request; deciding an id twice fails.
+- **Approval timeout** comes from `approval_timeout_secs` (default 120 s). On timeout
+  the agent gets `approval timed out` and `denied` is audited with `via: "timeout"`.
+- **Grants** (`session` scope) cover exactly the same request: same sorted secret set,
+  same argv or shell string, same resolved program, same canonical cwd, same injection,
+  same peer UID or SID (the PID is not part of it). The TTL is the smaller of what the
+  approver asked for and the policy cap; a cap of 0 turns a session approval into
+  `once`. Grants only help while the vault is unlocked: any lock (`credstore lock`, idle
+  relock, shutdown) drops every grant, so after a lock the human is asked again.
+- **`require_approval = false`** skips the human only while the vault is already
+  unlocked (the daemon has no key otherwise). Audited as `approved` with
+  `via: "policy"`.
+- **Unlock after approval:** an approval leaves the vault unlocked in daemon memory until
+  the idle TTL (`session_idle_secs`, default 600; 0 relocks right after each run,
+  audited as a `lock` with reason `after-run`).
+- **`watch` reads everything from the terminal.** The passphrase uses `rpassword`
+  (`/dev/tty`, or the console on Windows); the o/s/d choice uses a plain line read from
+  the same terminal, never stdin. With no terminal, `watch` exits with an error before
+  connecting. `crates/credstore/tests/watch_stdin.rs` runs the real binary without a
+  terminal (`setsid` on Linux, `DETACHED_PROCESS` on Windows; on macOS only when the
+  test itself has no terminal, as in CI), pipes the passphrase and `o` into stdin, and
+  checks that it refuses and the request stays pending.
+- **What `watch` shows:** reason, argv (quoted for display), resolved program, cwd,
+  secret names and descriptions, injection, sandbox mode, network policy and hosts, and
+  the requester's uid/SID, pid and exe. Every agent-supplied string has control
+  characters replaced, so an argv or path can't rewrite the screen.
+- **New audit fields:** `approved` has `via` (`human`, `grant`, `policy`), `scope`
+  (`"once"` or `{"session_secs": N}`) and the approver's peer; `denied` has `via`
+  (`human`, `timeout`, `shutdown`).
+- **Zeroization check:** `lock` reports how many values it wiped, and the tests check
+  that number. Values handed to an approved request are dropped (and zeroized) after
+  use. Reading freed memory to prove it would need `unsafe` in tests, which the
+  workspace forbids.
+- **Until M5,** an approved request is answered with `approved, but running commands is
+  not built yet`.
 
 ## Stubbed per OS
 
@@ -263,8 +306,9 @@ These settle gaps in the spec. They were confirmed by the human, not guessed.
 Stubs return `OsError::Unavailable("<mechanism> not built yet (Mx)")`; the daemon logs
 each unavailable hardening feature at startup.
 
-"Done" above means built and unit-tested for path resolution. The terminal prompt is not
-yet exercised by an automated test (it needs a real tty; M4 adds the piped-stdin test).
+"Done" above means built and unit-tested for path resolution. The terminal prompt's
+"no terminal" path is tested on every OS (piped stdin cannot answer it); reading from a
+real terminal is not, since CI has none.
 
 ## Dependencies added beyond spec section 4
 
