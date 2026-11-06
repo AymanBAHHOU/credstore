@@ -80,8 +80,7 @@ fn dev(home: PathBuf, explicit_home: bool) -> PlatformPaths {
     }
 }
 
-/// FNV-1a, used only to give each explicit dev home its own pipe names.
-#[cfg(windows)]
+/// FNV-1a, used only to give each dev home its own endpoint names.
 fn short_hash(p: &Path) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in p.to_string_lossy().as_bytes() {
@@ -140,10 +139,28 @@ fn dev_endpoints(home: &Path, explicit_home: bool) -> (String, String, PathBuf) 
     unix_dev_endpoints(tmp.unwrap_or_else(|| home.join("run")))
 }
 
+/// Longest socket path we use. `sun_path` is 104 bytes on macOS and 108 on Linux,
+/// including the terminating NUL.
+#[cfg(unix)]
+const MAX_SOCKET_PATH: usize = 100;
+
+/// Sockets go in `dir` unless the path would be too long for a Unix socket (macOS temp
+/// dirs often are). Then they go in `/tmp/credstore-<uid>-<hash of dir>`, which `bind`
+/// creates 0700 and refuses to use if someone else owns it.
 #[cfg(unix)]
 fn unix_dev_endpoints(dir: PathBuf) -> (String, String, PathBuf) {
-    let s = |name: &str| dir.join(name).to_string_lossy().into_owned();
-    (s("agent.sock"), s("approver.sock"), dir.join("run"))
+    let run_dir = dir.join("run");
+    let sock_dir = if dir.join("approver.sock").as_os_str().len() > MAX_SOCKET_PATH {
+        PathBuf::from(format!(
+            "/tmp/credstore-{}-{}",
+            nix::unistd::geteuid(),
+            short_hash(&dir)
+        ))
+    } else {
+        dir
+    };
+    let s = |name: &str| sock_dir.join(name).to_string_lossy().into_owned();
+    (s("agent.sock"), s("approver.sock"), run_dir)
 }
 
 // -------------------------------- Windows ---------------------------------
@@ -219,6 +236,19 @@ mod tests {
         );
         assert_ne!(aa.address, ap.address);
         assert_ne!(aa.address, b.endpoint(EndpointKind::Agent).address);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn long_homes_get_short_socket_paths() {
+        let home = std::env::temp_dir().join("x".repeat(120));
+        let p = PlatformPaths::dev_with_home(&home);
+        for kind in [EndpointKind::Agent, EndpointKind::Approver] {
+            let a = p.endpoint(kind).address;
+            assert!(a.len() <= MAX_SOCKET_PATH, "{a}");
+            assert!(a.starts_with("/tmp/credstore-"), "{a}");
+        }
+        assert!(p.run_dir().starts_with(&home));
     }
 
     #[test]

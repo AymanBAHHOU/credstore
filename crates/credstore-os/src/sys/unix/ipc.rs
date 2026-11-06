@@ -31,6 +31,7 @@ pub async fn bind(endpoint: &Endpoint, access: &EndpointAccess) -> OsResult<Unix
     let path = PathBuf::from(&endpoint.address);
     if let Some(dir) = path.parent() {
         osfs::create_private_dir(dir)?;
+        check_socket_dir(dir, access)?;
     }
     if path.exists() {
         if UnixStream::connect(&path).await.is_ok() {
@@ -60,6 +61,26 @@ pub async fn bind(endpoint: &Endpoint, access: &EndpointAccess) -> OsResult<Unix
         path,
         access: access.clone(),
     })
+}
+
+/// The socket directory must be ours and not writable by others, or someone could swap
+/// the socket. In same-user mode it must not be readable by others either.
+fn check_socket_dir(dir: &Path, access: &EndpointAccess) -> OsResult<()> {
+    let meta = std::fs::symlink_metadata(dir)?;
+    let mode = meta.mode() & 0o777;
+    let open_bits = match access {
+        EndpointAccess::SameUser => 0o077,
+        EndpointAccess::Group(_) => 0o002,
+    };
+    if !meta.is_dir() || meta.uid() != Uid::effective().as_raw() || mode & open_bits != 0 {
+        return Err(OsError::Denied(format!(
+            "refusing to use socket directory {}: it must be a directory owned by this user              with mode 0700 (found owner uid {}, mode {:o})",
+            dir.display(),
+            meta.uid(),
+            mode
+        )));
+    }
+    Ok(())
 }
 
 impl Drop for UnixIpcListener {
