@@ -142,9 +142,16 @@ fn main() {
 }
 
 /// Linux: try `/proc/<pid>/mem`, scanning every readable mapping for `needle`.
+/// Elsewhere: try to open the process for memory reads (Windows `OpenProcess` with
+/// `PROCESS_VM_READ`).
 fn read_memory(pid: &str, needle: &[u8]) -> String {
     if !cfg!(target_os = "linux") {
-        return "unsupported on this OS".into();
+        use credstore_os::probe::{process_memory_access, MemoryAccess};
+        return match process_memory_access(pid.parse().unwrap_or(0)) {
+            MemoryAccess::Readable => "OPENED the daemon for reading".into(),
+            MemoryAccess::Denied(e) => format!("denied: {e}"),
+            MemoryAccess::Unsupported(e) => format!("unsupported: {e}"),
+        };
     }
     let maps = match std::fs::read_to_string(format!("/proc/{pid}/maps")) {
         Ok(m) => m,

@@ -17,6 +17,7 @@ pub mod exec;
 pub mod fs;
 mod paths;
 mod platform;
+pub mod probe;
 pub mod run;
 pub mod sandbox;
 pub mod signals;

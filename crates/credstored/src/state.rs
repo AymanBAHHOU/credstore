@@ -37,7 +37,13 @@ pub(crate) struct State {
     pub(crate) approvals: Mutex<Approvals>,
     /// Bumped whenever the pending list changes; `watch` subscribers wait on it.
     pub(crate) pending_version: tokio::sync::watch::Sender<u64>,
+    /// Commands running now. The idle relock waits for them.
+    pub(crate) active_runs: std::sync::atomic::AtomicUsize,
 }
+
+/// With `session_idle_secs = 0` the runner relocks right after each run; the background
+/// ticker only catches a vault left unlocked with no run (for example after `unlock`).
+const ZERO_TTL_GRACE: Duration = Duration::from_secs(5);
 
 pub(crate) struct Unlocked {
     pub contents: VaultContents,
@@ -121,6 +127,7 @@ impl State {
             search_path: exec::search_path(),
             approvals: Mutex::new(Approvals::default()),
             pending_version: tokio::sync::watch::channel(0).0,
+            active_runs: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -181,9 +188,15 @@ impl State {
         Some(wiped)
     }
 
-    /// Relock if idle for longer than the TTL.
+    /// Relock if idle for longer than the TTL. Never while a command runs.
     pub fn relock_if_idle(&self) {
-        let ttl = *self.idle_ttl.lock().unwrap_or_else(|p| p.into_inner());
+        if self.active_runs.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+            return;
+        }
+        let mut ttl = *self.idle_ttl.lock().unwrap_or_else(|p| p.into_inner());
+        if ttl.is_zero() {
+            ttl = ZERO_TTL_GRACE;
+        }
         let idle = self
             .unlocked
             .lock()

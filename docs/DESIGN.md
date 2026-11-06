@@ -300,9 +300,12 @@ runner (`credstored::runner`):
    panics included;
 2. builds a cleared environment: `PATH` (the daemon's absolute `PATH` entries), `HOME`
    (`USERPROFILE` on Windows), `TMPDIR` (`TEMP`/`TMP`), `LANG` on Unix, and on Windows
-   `SystemRoot`, `SystemDrive`, `windir`, `ComSpec`, `PATHEXT`,
-   `PROCESSOR_ARCHITECTURE`, `NUMBER_OF_PROCESSORS`, plus only the approved secrets
-   (names compared case-insensitively on Windows);
+   the standard system-defined variables (`SystemRoot`, `ComSpec`, `PATHEXT`, the
+   `ProgramFiles`/`AppData` folders, `PSModulePath`, `PROCESSOR_*`, user and computer
+   name), plus only the approved secrets (names compared case-insensitively on
+   Windows). Deviation: spec 6.4 lists fewer Windows variables, but without
+   `LOCALAPPDATA` Windows PowerShell rescans every installed module on each start
+   (minutes on a CI image). None of these is user-defined or secret;
 3. writes `run_started` to the audit log, and does not run if that write fails;
 4. runs, kills the whole process tree whatever happened, redacts, writes `run_finished`
    (`exit_code`, `duration_ms`, `sandbox`, `stdout_bytes`, `stderr_bytes`, `truncated`,
@@ -331,6 +334,12 @@ runner (`credstored::runner`):
 - **`credstore run`** sends `admin_run` with the passphrase; that passphrase is the
   approval (audited as `approved` with `via: "admin"`). Policy still applies. The daemon
   releases its approver lock while the command runs.
+- **Idle relock waits for running commands.** With `session_idle_secs = 0` the runner
+  relocks right after each run (`lock` reason `after-run`); the background ticker
+  gives a zero TTL 5 s of grace so it does not race an approval that is about to run.
+- **Memory probe** (`credstore_os::probe::process_memory_access`): opens
+  `/proc/<pid>/mem` or calls `OpenProcess(PROCESS_VM_READ)`, reads nothing. Used by the
+  adversarial suite now and by `doctor` in M7.
 - **Startup sweep**: the daemon empties its run dir at start and audits
   `run_dir_swept` if anything was left (a daemon killed mid-run).
 - **Windows working directories** drop the `\\?\` prefix `canonicalize` adds (`cmd.exe`

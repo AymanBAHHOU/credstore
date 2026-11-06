@@ -28,7 +28,7 @@ use windows_sys::Win32::System::Diagnostics::Debug::{
 use windows_sys::Win32::System::Pipes::{GetNamedPipeClientProcessId, ImpersonateNamedPipeClient};
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentThread, OpenProcess, OpenProcessToken, OpenThreadToken,
-    QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+    QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
 };
 
 /// Owned kernel handle, closed on drop.
@@ -324,6 +324,18 @@ pub fn exe_of_pid(pid: u32) -> Option<String> {
 /// owner's implicit READ_CONTROL / WRITE_DAC. Accounts with SeDebugPrivilege bypass this.
 /// Terminate is allowed so the user can always stop a dev daemon; it is not a
 /// confidentiality risk.
+/// Try `OpenProcess(PROCESS_VM_READ)` on `pid` (the handle is closed at once).
+pub fn open_for_memory_read(pid: u32) -> crate::probe::MemoryAccess {
+    // SAFETY: plain call; a non-null handle is owned and closed by `OwnedHandle`.
+    let h = unsafe { OpenProcess(PROCESS_VM_READ, 0, pid) };
+    if h.is_null() {
+        crate::probe::MemoryAccess::Denied(io::Error::last_os_error().to_string())
+    } else {
+        drop(OwnedHandle::from_raw(h));
+        crate::probe::MemoryAccess::Readable
+    }
+}
+
 pub fn protect_current_process() -> io::Result<()> {
     // SYSTEM: full. Owner rights and this account: PROCESS_QUERY_(LIMITED_)INFORMATION |
     // SYNCHRONIZE | PROCESS_TERMINATE. The explicit user ACE covers sessions where the

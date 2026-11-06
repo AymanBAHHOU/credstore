@@ -27,7 +27,11 @@ pub fn shell_command(script: &str) -> (PathBuf, Vec<String>, Option<String>) {
 }
 
 /// Spec 6.4: Windows programs need `SystemRoot`, `ComSpec`, `TEMP`, `TMP` and `PATHEXT`
-/// to start; a few more harmless system values are passed so common tools work.
+/// to start. The standard system-defined variables (folders, machine and user names) are
+/// passed too: they hold no secrets, and tools depend on them. Without `LOCALAPPDATA`,
+/// for example, Windows PowerShell cannot find its module cache and rescans every
+/// installed module on each start, which can take minutes. Nothing user-defined is
+/// passed.
 pub fn base_env(home: &Path, tmp: &Path, path: &OsString) -> Vec<(String, String)> {
     let mut v = vec![
         ("PATH".to_string(), path.to_string_lossy().into_owned()),
@@ -44,8 +48,29 @@ pub fn base_env(home: &Path, tmp: &Path, path: &OsString) -> Vec<(String, String
         "windir",
         "ComSpec",
         "PATHEXT",
+        "OS",
         "PROCESSOR_ARCHITECTURE",
+        "PROCESSOR_IDENTIFIER",
+        "PROCESSOR_LEVEL",
+        "PROCESSOR_REVISION",
         "NUMBER_OF_PROCESSORS",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "ProgramData",
+        "ALLUSERSPROFILE",
+        "PUBLIC",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "ProgramW6432",
+        "CommonProgramFiles",
+        "CommonProgramFiles(x86)",
+        "CommonProgramW6432",
+        "PSModulePath",
+        "USERNAME",
+        "USERDOMAIN",
+        "COMPUTERNAME",
+        "HOMEDRIVE",
+        "HOMEPATH",
     ] {
         if let Ok(value) = std::env::var(name) {
             v.push((name.to_string(), value));

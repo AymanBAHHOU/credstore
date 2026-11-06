@@ -209,10 +209,13 @@ async fn credstore_files_are_hidden_or_the_gap_is_reported() {
             caps.detail,
             r.stdout
         );
+        // Checked on the host: under bubblewrap /tmp is a private tmpfs, so the write
+        // "succeeds" inside the sandbox and never reaches the real file.
         assert!(
-            !w.stdout.contains("WROTE"),
-            "{} let the command write outside cwd",
-            caps.detail
+            !outside.exists(),
+            "{} let the command write outside cwd ({})",
+            caps.detail,
+            w.stdout
         );
     } else {
         let started = last_record(&d, "run_started");
@@ -241,33 +244,8 @@ async fn daemon_memory_cannot_be_read() {
         return;
     }
     let pid = std::process::id().to_string();
-    let r = if cfg!(target_os = "linux") {
+    let r = if cfg!(any(target_os = "linux", windows)) {
         run_adv(&d, &dir, &["readmem", &pid, "API_KEY"]).await
-    } else if cfg!(windows) {
-        // OpenProcess with PROCESS_VM_READ (0x10) on the daemon.
-        let script = format!(
-            "$s = '[DllImport(\"kernel32.dll\", SetLastError = true)] public static extern \
-             System.IntPtr OpenProcess(uint access, bool inherit, int pid);'; \
-             $k = Add-Type -MemberDefinition $s -Name K -Namespace W -PassThru; \
-             $h = $k::OpenProcess(16, $false, {pid}); \
-             if ($h -eq [System.IntPtr]::Zero) {{ 'denied: OpenProcess failed' }} \
-             else {{ 'OPENED the daemon for reading' }}"
-        );
-        let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
-        let encoded = enc::base64(&utf16, enc::STD, true);
-        result(
-            d.run(request(
-                &[
-                    "powershell",
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-EncodedCommand",
-                    &encoded,
-                ],
-                &dir,
-            ))
-            .await,
-        )
     } else {
         // macOS: task_for_pid needs the debugger entitlement or root, and the daemon sets
         // PT_DENY_ATTACH; there is no unprivileged way to even attempt it from a test.

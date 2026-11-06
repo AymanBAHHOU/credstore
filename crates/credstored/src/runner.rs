@@ -87,7 +87,17 @@ impl State {
 
     /// Run an approved request, then relock if the idle TTL is zero.
     pub async fn execute(&self, prepared: Prepared, values: Values) -> Response {
+        struct Active<'a>(&'a std::sync::atomic::AtomicUsize);
+        impl Drop for Active<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        self.active_runs
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let active = Active(&self.active_runs);
         let resp = self.execute_inner(&prepared, values).await;
+        drop(active);
         let idle = *self.idle_ttl.lock().unwrap_or_else(|p| p.into_inner());
         if idle.is_zero() {
             self.relock("after-run");
