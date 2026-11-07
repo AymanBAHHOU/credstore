@@ -26,6 +26,10 @@ use crate::commands::{printable, Prompt};
 pub const NO_TERMINAL: &str = "credstore watch needs a terminal: approvals are typed on the \
 terminal, never read from stdin";
 
+/// Said when the daemon does not know this user's Hello key: it was made for an older
+/// vault (a reinstall, or the data directory was deleted).
+const UNKNOWN_KEY_HINT: &str = "This vault does not trust the Windows Hello key on this computer (it was made for an older vault). Run `credstore hello enrol` to replace it.";
+
 /// Show pending requests as they arrive and ask the human about each one. Runs until the
 /// connection drops or input fails (Ctrl-C ends the process).
 pub async fn watch(client: &Client, p: &dyn Prompt, out: &mut dyn Write) -> anyhow::Result<()> {
@@ -55,6 +59,9 @@ pub async fn watch_with(
             Ok((stream, Response::Error { message, .. })) => {
                 drop(stream);
                 writeln!(out, "{}: {}", s.name(), printable(&message))?;
+                if message.contains("unknown key") {
+                    writeln!(out, "{UNKNOWN_KEY_HINT}")?;
+                }
             }
             Ok(ok) => subscribed = Some(ok),
             Err(e) => writeln!(out, "{}: {}", s.name(), printable(&format!("{e:#}")))?,
@@ -345,6 +352,9 @@ async fn decide(
                 }
                 Ok(Response::Error { message, .. }) => {
                     writeln!(out, "{}: {}", s.name(), printable(&message))?;
+                    if message.contains("unknown key") {
+                        writeln!(out, "{UNKNOWN_KEY_HINT}")?;
+                    }
                 }
                 Ok(other) => return Err(response_error(other)),
                 Err(e) => writeln!(out, "{}: {}", s.name(), printable(&format!("{e:#}")))?,

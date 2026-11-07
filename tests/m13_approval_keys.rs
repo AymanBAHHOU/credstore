@@ -167,6 +167,54 @@ async fn a_key_opens_the_apps_feed() {
     d.stop().await;
 }
 
+/// One feed snapshot, opened with the passphrase.
+async fn feed_with_passphrase(d: &TestDaemon) -> credstore_proto::Feed {
+    use credstore_os::EndpointKind;
+    use credstore_proto::{read_message, write_message, ApproverRequest};
+    let mut stream = d.connect(EndpointKind::Approver).await;
+    write_message(
+        &mut stream,
+        &ApproverRequest {
+            proof: Proof::Passphrase(pass()),
+            op: ApproverOp::SubscribeFeed,
+        },
+    )
+    .await
+    .unwrap();
+    match read_message(&mut stream).await.unwrap() {
+        Response::Feed(f) => *f,
+        r => panic!("{r:?}"),
+    }
+}
+
+/// The app shows the Hello switch as on only if the vault trusts this computer's key:
+/// a key left in Windows Hello from an older vault must not look enrolled.
+#[tokio::test]
+async fn the_feed_says_which_keys_the_vault_trusts() {
+    let (d, key, id) = ready("m13-feed-keys").await;
+    unlock(&d).await;
+    // The app compares this id, computed from Hello's public key, with the list.
+    assert_eq!(
+        credstore_os::approval_key::key_id(&KeySigner::public_key(&key).unwrap()),
+        id
+    );
+    let f = feed_with_passphrase(&d).await;
+    assert!(!f.locked);
+    assert_eq!(f.approval_keys, Some(vec![id.clone()]));
+
+    // Removed: the key is still in "Windows" (here, in memory) but no longer trusted.
+    approval::remove(&d.client(), &id, pass()).await.unwrap();
+    let f = feed_with_passphrase(&d).await;
+    assert_eq!(f.approval_keys, Some(vec![]));
+
+    // Locked: the list is inside the vault, so the feed cannot say.
+    let r = d.client().approver(ApproverOp::Lock, pass()).await.unwrap();
+    assert!(matches!(r, Response::Ok), "{r:?}");
+    let f = feed_with_passphrase(&d).await;
+    assert_eq!(f.approval_keys.is_none(), f.locked, "{f:?}");
+    d.stop().await;
+}
+
 #[tokio::test]
 async fn forged_replayed_and_stale_proofs_are_refused() {
     let (d, key, id) = ready("m13-forged").await;

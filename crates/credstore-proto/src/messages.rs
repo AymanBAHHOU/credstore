@@ -453,6 +453,11 @@ pub struct Feed {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_error: Option<String>,
     pub locked: bool,
+    /// Ids of the approval keys the vault trusts (`AddApprovalKey`). `None` while the
+    /// vault is locked, because the list is inside it. The app compares its own Hello key
+    /// with this list, so a key left from an older vault does not show as "on".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_keys: Option<Vec<String>>,
 }
 
 /// The policy as the app shows it.
