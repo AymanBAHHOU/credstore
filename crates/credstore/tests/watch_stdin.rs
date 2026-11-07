@@ -171,9 +171,7 @@ async fn piped_stdin_cannot_approve() {
         write_message(
             &mut s,
             &ApproverRequest {
-                proof: Proof {
-                    passphrase: SecretText::new(PASS.into()),
-                },
+                proof: Proof::Passphrase(SecretText::new(PASS.into())),
                 op: ApproverOp::SubscribePending,
             },
         )

@@ -33,10 +33,16 @@ impl Client {
         passphrase: SecretText,
     ) -> anyhow::Result<Response> {
         let req = ApproverRequest {
-            proof: Proof { passphrase },
+            proof: Proof::Passphrase(passphrase),
             op,
         };
         self.call(EndpointKind::Approver, &req).await
+    }
+
+    /// Send an approver operation with any proof (an approval-key signature).
+    pub async fn approver_with(&self, op: ApproverOp, proof: Proof) -> anyhow::Result<Response> {
+        self.call(EndpointKind::Approver, &ApproverRequest { proof, op })
+            .await
     }
 
     /// Open a connection to an endpoint (for streaming requests).
@@ -92,7 +98,7 @@ fn kind_of(r: &Response) -> &'static str {
 /// Bail unless `resp` is a status.
 pub fn expect_status(resp: Response) -> anyhow::Result<credstore_proto::StatusInfo> {
     match resp {
-        Response::Status(s) => Ok(s),
+        Response::Status(s) => Ok(*s),
         other => bail!(response_error(other)),
     }
 }

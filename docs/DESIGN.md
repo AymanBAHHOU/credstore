@@ -799,6 +799,63 @@ back as `[REDACTED:NAME]`; then a self-signed certificate is refused. The MCP te
 the tool's schema and a policy denial over stdio. Core unit tests cover URL, header and
 host matching.
 
+## Approval keys: Windows Hello (M13)
+
+**Goal.** Approve without typing the passphrase, so a same-user keylogger sees nothing
+for most decisions. The daemon must not trust a client that only says "Hello said yes"
+(any process of the human can say that), so the approval is a signature the daemon
+verifies.
+
+- **Enrolment** (`credstore hello enrol`, passphrase required). Windows Hello creates
+  the RSA key `credstore-approver` (`KeyCredentialManager.RequestCreateAsync`); its
+  private half stays in the TPM or the Hello container and is used only after Hello
+  verifies the user. The CLI sends the DER SubjectPublicKeyInfo with
+  `add_approval_key`; the daemon checks it imports as RSA and stores it **inside the
+  encrypted vault** (`approval_keys`, id = first 16 bytes of its SHA-256), so nobody
+  without the passphrase can add a key. At most 16 keys. `credstore hello remove`
+  removes it from the vault and from Hello. `credstore status` lists the keys.
+- **Proof.** `Proof` is now `{"passphrase": …}` (unchanged on the wire) or `{"key":
+  {key_id, time, nonce, signature}}`. The signature (PKCS#1 v1.5, SHA-256, what Hello's
+  `RequestSignAsync` makes) covers `credstore approval v1\n<key_id>\n<time>\n<nonce>\n`
+  followed by the operation's JSON, so it cannot be reused for another operation.
+- **What a key may do:** subscribe, approve, deny, status, lock (`key_allowed`). Not
+  unlock, set/rm, `credstore run`, init, or add/remove keys: those need the passphrase.
+- **Only while unlocked.** The keys live in the vault, so the daemon checks them
+  against the unlocked copy; while locked, a key proof is refused ("unlock with the
+  passphrase first"). Approving a request still needs the decrypted values, which only
+  the passphrase gives after a relock. So the passphrase is typed once per unlock
+  session (at most `session_idle_secs`), then Hello confirms each decision.
+- **Freshness.** `time` within 60 s of the daemon's clock, and a nonce seen in the last
+  two minutes is refused (replay). The nonce only needs to be unique (it is signed), so
+  it is a hash of time, pid and a counter: no RNG dependency.
+- **Failures** (unknown key, bad or stale signature, replay) are audited as
+  `auth_failed` with `via: "approval_key"` and count towards the passphrase lockout.
+- **Verification** uses CNG (`CryptImportPublicKeyInfoEx2`, `BCryptVerifySignature`) in
+  `credstore-os` (`sys/windows/sig.rs`, the only new unsafe module). No RSA crate: the
+  pure-Rust `rsa` crate carries an open advisory (Marvin), and Windows is the only
+  platform with keys today.
+- **Clients.** `credstore watch` uses Hello when this user has the key: it subscribes
+  with Hello and confirms each decision with Hello, falling back to the passphrase
+  prompt when Hello is cancelled or the daemon refuses (locked). The desktop app's
+  passphrase box may be left empty to use Hello.
+- **macOS (Touch ID): not built.** A Secure Enclave key needs a signed app with a
+  keychain entitlement, which needs the owner's Apple Developer account (spec 11);
+  `LAContext` alone is a yes/no the daemon cannot verify. **Linux:** no common biometric
+  service; passphrase only.
+- **Dependency** beyond spec section 4: the **`windows`** crate (Microsoft, same family
+  as `windows-sys`) for the WinRT `KeyCredentialManager`, which `windows-sys` does not
+  cover. Features: Foundation, Security_Credentials, Security_Cryptography(_Core),
+  Storage_Streams.
+
+**Tested** in `tests/m13_approval_keys.rs` (Windows) with an in-process CNG RSA key in
+Hello's signature format (`SoftwareKey`; Hello itself needs a person): approve and deny
+with a key; refused while locked; refused for unlock, rm and key changes; replay,
+another operation's signature, an unknown key and a stale time refused; a removed key
+stops working; malformed keys are not enrolled; keys survive a restart; `watch`
+approves with no passphrase typed and falls back to it while locked.
+`live_windows_hello_approves` (ignored) does the real enrol and sign, for a person at a
+machine with Hello. Unit tests cover CNG sign/verify and the wire format.
+
 ## Stubbed per OS
 
 | Capability      | Linux                 | macOS                 | Windows               |
@@ -817,6 +874,7 @@ host matching.
 | Package         | `.deb` (CI install), `.rpm` (built, inspected) | `.pkg`, unsigned (CI install) | `.msi`, unsigned (CI install) |
 | `doctor`        | done                  | done (no memory probe) | done                  |
 | Desktop app     | done (smoke under xvfb, CI) | done (smoke, CI) | done (smoke, CI) |
+| Biometric approval | none (passphrase) | not built (needs a signed app) | done (Windows Hello key; CI tests use a software key) |
 
 Stubs return `OsError::Unavailable("<mechanism> not built yet (Mx)")`; the daemon logs
 each unavailable hardening feature at startup.
@@ -834,6 +892,8 @@ real terminal is not, since CI has none.
   section.
 - The desktop app (`app/`, its own workspace) uses Tauri 2 and its dialog and
   notification plugins (M10).
+- `windows` 0.62 (WinRT `KeyCredentialManager`): Windows Hello approval keys (M13); see
+  that section.
 
 ## Dependency advisories
 

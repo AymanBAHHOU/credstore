@@ -1,5 +1,6 @@
 //! Daemon state and request handling (everything except socket plumbing).
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -11,7 +12,8 @@ use crate::approvals::{Approvals, Job};
 use credstore_core::vault::{Vault, VaultContents, VaultError};
 use credstore_os::{exec, Mode, Paths, Platform};
 use credstore_proto::{
-    AgentRequest, ApproverOp, ApproverRequest, ErrorCode, PeerInfo, Proof, Response, StatusInfo,
+    AgentRequest, ApproverOp, ApproverRequest, ErrorCode, KeyProof, PeerInfo, Proof, Response,
+    SecretText, StatusInfo,
 };
 use serde_json::{json, Map, Value};
 
@@ -19,6 +21,8 @@ use serde_json::{json, Map, Value};
 pub const MAX_FAILURES: u32 = 5;
 /// First lockout; doubles after each further lockout until a correct passphrase.
 pub const FIRST_LOCKOUT: Duration = Duration::from_secs(60);
+/// How far an approval-key signature's time may be from the daemon's clock.
+pub const KEY_PROOF_WINDOW_SECS: u64 = 60;
 
 pub(crate) struct State {
     pub platform: Platform,
@@ -29,6 +33,8 @@ pub(crate) struct State {
     vault_ops: tokio::sync::Mutex<()>,
     pub(crate) unlocked: Mutex<Option<Unlocked>>,
     limiter: Mutex<RateLimiter>,
+    /// Nonces of approval-key proofs seen in the last two windows (no replays).
+    key_nonces: Mutex<HashMap<String, Instant>>,
     pub idle_ttl: Mutex<Duration>,
     /// Loaded policy, or why it could not be loaded (then every run is denied).
     pub(crate) policy: Mutex<Result<Arc<Policy>, String>>,
@@ -124,6 +130,7 @@ impl State {
             vault_ops: tokio::sync::Mutex::new(()),
             unlocked: Mutex::new(None),
             limiter: Mutex::new(RateLimiter::new()),
+            key_nonces: Mutex::new(HashMap::new()),
             idle_ttl: Mutex::new(Duration::from_secs(600)),
             policy: Mutex::new(Err("not loaded yet".into())),
             search_path: exec::search_path(),
@@ -211,11 +218,109 @@ impl State {
         }
     }
 
-    /// Check a passphrase proof by decrypting the vault. Rate limited; the caller must
-    /// hold `vault_ops`.
+    /// Check a proof for `op`. The caller must hold `vault_ops`.
     async fn verify_proof(
         &self,
         proof: &Proof,
+        op: &ApproverOp,
+        peer: &PeerInfo,
+    ) -> Result<VaultContents, Response> {
+        match proof {
+            Proof::Passphrase(pass) => self.verify_passphrase(pass, peer).await,
+            Proof::Key(k) => self.verify_key(k, op, peer),
+        }
+    }
+
+    /// Check an approval-key signature (M13). Only for [`ApproverOp::key_allowed`]
+    /// operations, only while the vault is unlocked (the key is in it), within the time
+    /// window, once per nonce. Failures count towards the passphrase lockout.
+    fn verify_key(
+        &self,
+        k: &KeyProof,
+        op: &ApproverOp,
+        peer: &PeerInfo,
+    ) -> Result<VaultContents, Response> {
+        let unauthorized = |msg: &str| error(ErrorCode::Unauthorized, msg);
+        if let Some(wait) = self
+            .limiter
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .locked_out(Instant::now())
+        {
+            return Err(error(
+                ErrorCode::RateLimited,
+                format!("too many failed approvals; try again in {wait} s"),
+            ));
+        }
+        if !op.key_allowed() {
+            return Err(unauthorized("this operation needs the passphrase"));
+        }
+        let Some(contents) = self
+            .unlocked
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .map(|u| u.contents.clone())
+        else {
+            return Err(unauthorized(
+                "the vault is locked; unlock it with the passphrase first",
+            ));
+        };
+        let fail = |why: &str| {
+            self.limiter
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .failure(Instant::now());
+            let _ = self.audit(
+                "auth_failed",
+                None,
+                json!({"peer": peer_json(peer), "via": "approval_key", "key_id": k.key_id, "why": why}),
+            );
+            unauthorized(&format!("approval key rejected: {why}"))
+        };
+        let Some(key) = contents.approval_key(&k.key_id) else {
+            return Err(fail("unknown key"));
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        if now.abs_diff(k.time) > KEY_PROOF_WINDOW_SECS {
+            return Err(fail("signed too long ago, or the clock is off"));
+        }
+        if k.nonce.len() != 32 || credstore_proto::unhex(&k.nonce).is_none() {
+            return Err(fail("bad nonce"));
+        }
+        let (Some(spki), Some(sig)) = (
+            credstore_proto::unhex(&key.public_key),
+            credstore_proto::unhex(&k.signature),
+        ) else {
+            return Err(fail("bad signature encoding"));
+        };
+        {
+            let mut seen = self.key_nonces.lock().unwrap_or_else(|p| p.into_inner());
+            let keep = Duration::from_secs(KEY_PROOF_WINDOW_SECS * 2 + 5);
+            seen.retain(|_, t| t.elapsed() < keep);
+            if seen.contains_key(&k.nonce) {
+                return Err(fail("replayed"));
+            }
+            let msg = credstore_proto::signed_message(&k.key_id, k.time, &k.nonce, op);
+            if !credstore_os::approval_key::verify(&spki, &msg, &sig) {
+                return Err(fail("bad signature"));
+            }
+            seen.insert(k.nonce.clone(), Instant::now());
+        }
+        self.limiter
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .success();
+        Ok(contents)
+    }
+
+    /// Check a passphrase by decrypting the vault. Rate limited.
+    async fn verify_passphrase(
+        &self,
+        pass: &SecretText,
         peer: &PeerInfo,
     ) -> Result<VaultContents, Response> {
         if let Some(wait) = self
@@ -230,7 +335,7 @@ impl State {
             ));
         }
         let vault = self.vault.clone();
-        let pass = proof.passphrase.clone();
+        let pass = pass.clone();
         let result = tokio::task::spawn_blocking(move || vault.unlock(&pass)).await;
         match result {
             Ok(Ok(contents)) => {
@@ -318,7 +423,7 @@ impl State {
             return self.admin_init(&req.proof, peer).await;
         }
 
-        let contents = match self.verify_proof(&req.proof, peer).await {
+        let contents = match self.verify_proof(&req.proof, &req.op, peer).await {
             Ok(c) => c,
             Err(resp) => return resp,
         };
@@ -335,7 +440,7 @@ impl State {
                 self.relock("requested");
                 Response::Ok
             }
-            ApproverOp::Status => Response::Status(StatusInfo {
+            ApproverOp::Status => Response::Status(Box::new(StatusInfo {
                 locked: !self.is_unlocked(),
                 dev_mode: self.mode() == Mode::Dev,
                 pending: u32::try_from(self.pending_count()).unwrap_or(u32::MAX),
@@ -351,7 +456,31 @@ impl State {
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
                     .clone(),
-            }),
+                approval_keys: contents.approval_keys(),
+            })),
+            ApproverOp::AddApprovalKey { label, public_key } => {
+                let Some(spki) = credstore_proto::unhex(&public_key) else {
+                    return error(ErrorCode::BadRequest, "public_key is not hex");
+                };
+                if let Err(e) = credstore_os::approval_key::check_public_key(&spki) {
+                    return error(ErrorCode::BadRequest, format!("unusable public key: {e}"));
+                }
+                let id = credstore_os::approval_key::key_id(&spki);
+                let mut contents = contents;
+                if let Err(e) = contents.add_approval_key(&id, &label, &public_key) {
+                    return error(ErrorCode::BadRequest, e.to_string());
+                }
+                self.save(contents, &req.proof, peer, "approval_key_added", &id)
+                    .await
+            }
+            ApproverOp::RemoveApprovalKey { id } => {
+                let mut contents = contents;
+                if let Err(e) = contents.remove_approval_key(&id) {
+                    return error(ErrorCode::BadRequest, e.to_string());
+                }
+                self.save(contents, &req.proof, peer, "approval_key_removed", &id)
+                    .await
+            }
             ApproverOp::AdminSet {
                 name,
                 description,
@@ -397,15 +526,23 @@ impl State {
     /// Check a proof on its own (for streaming operations).
     pub async fn verify(&self, proof: &Proof, peer: &PeerInfo) -> Result<(), Response> {
         let _ops = self.vault_ops.lock().await;
-        self.verify_proof(proof, peer).await.map(drop)
+        self.verify_proof(proof, &ApproverOp::SubscribePending, peer)
+            .await
+            .map(drop)
     }
 
     async fn admin_init(&self, proof: &Proof, peer: &PeerInfo) -> Response {
         if self.vault.exists() {
             return error(ErrorCode::BadRequest, "a vault already exists");
         }
+        let Proof::Passphrase(pass) = proof else {
+            return error(
+                ErrorCode::Unauthorized,
+                "creating a vault needs a passphrase",
+            );
+        };
         let vault = self.vault.clone();
-        let pass = proof.passphrase.clone();
+        let pass = pass.clone();
         match tokio::task::spawn_blocking(move || vault.create(&pass)).await {
             Ok(Ok(())) => {
                 let _ = self.audit(
@@ -429,8 +566,15 @@ impl State {
         action: &str,
         name: &str,
     ) -> Response {
+        // Only passphrase-proved operations change the vault (key_allowed has none).
+        let Proof::Passphrase(pass) = proof else {
+            return error(
+                ErrorCode::Unauthorized,
+                "this operation needs the passphrase",
+            );
+        };
         let vault = self.vault.clone();
-        let pass = proof.passphrase.clone();
+        let pass = pass.clone();
         let saved = tokio::task::spawn_blocking(move || {
             let r = vault.save(&contents, &pass);
             (contents, r)

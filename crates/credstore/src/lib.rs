@@ -4,6 +4,7 @@
 //! values are never accepted on argv or from the CLI's own environment.
 
 pub mod api;
+pub mod approval;
 pub mod client;
 pub mod commands;
 pub mod doctor;

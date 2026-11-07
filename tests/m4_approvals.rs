@@ -356,7 +356,7 @@ async fn agent_endpoint_cannot_subscribe_or_approve() {
             credstore_proto::write_message(
                 &mut s,
                 &credstore_proto::ApproverRequest {
-                    proof: credstore_proto::Proof { passphrase: pass() },
+                    proof: credstore_proto::Proof::Passphrase(pass()),
                     op,
                 },
             )

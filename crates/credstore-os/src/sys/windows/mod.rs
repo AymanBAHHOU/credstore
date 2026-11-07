@@ -1,11 +1,13 @@
 //! Windows.
 
 pub mod appcontainer;
+pub mod hello;
 pub mod ipc;
 pub mod job;
 pub mod proc;
 pub mod sandbox;
 pub mod service;
+pub mod sig;
 pub mod win;
 
 use crate::{FeatureStatus, HardeningItem};

@@ -53,10 +53,12 @@ for (const b of document.querySelectorAll("#tabs button")) {
 // ------------------------------------------------------------------ overview
 
 let mode = "installed";
+let hello = false;
 
 async function refresh() {
   const o = await invoke("overview");
   mode = o.mode;
+  hello = o.hello;
   const status = $("status");
   if (o.reachable) {
     status.textContent = `${o.mode === "dev" ? "dev mode (weaker)" : "installed"} · ${o.os} · v${o.version}`;
@@ -139,13 +141,20 @@ function requestCard(r) {
   const rows = requestRows(r).filter(([, v]) => v);
   const dl = el("dl", {}, rows.flatMap(([k, v]) => [el("dt", {}, k), el("dd", {}, v)]));
   const gaps = r.not_enforced.map((g) => el("p", { class: "gap" }, "Not enforced: " + g));
-  const pass = el("input", { type: "password", autocomplete: "off", placeholder: "Passphrase to confirm" });
+  const pass = el("input", {
+    type: "password", autocomplete: "off",
+    placeholder: hello ? "Passphrase (or leave empty for Windows Hello)" : "Passphrase to confirm",
+  });
   const msg = el("p", { class: "msg" });
   const decide = async (decision) => {
-    if (!pass.value) {
+    if (!pass.value && !hello) {
       msg.textContent = "Enter your passphrase to confirm.";
       msg.className = "msg bad";
       return;
+    }
+    if (!pass.value) {
+      msg.textContent = "Confirm with Windows Hello...";
+      msg.className = "msg";
     }
     const p = takePassphrase(pass);
     try {
@@ -157,7 +166,7 @@ function requestCard(r) {
         msg.textContent = "Wrong passphrase. The request is still pending.";
         msg.className = "msg bad";
       } else {
-        msg.textContent = out.message;
+        msg.textContent = p ? out.message : out.message + " Enter your passphrase instead.";
         msg.className = "msg bad";
       }
     } catch (e) {

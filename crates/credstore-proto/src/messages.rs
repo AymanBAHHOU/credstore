@@ -1,8 +1,8 @@
 //! Request and response types for both endpoints.
 //!
 //! The agent endpoint accepts only [`AgentRequest`]. The approver endpoint accepts only
-//! [`ApproverRequest`], and every one of those carries a passphrase [`Proof`]: a
-//! connection alone grants nothing. Unknown fields and unknown message types are
+//! [`ApproverRequest`], and every one of those carries a [`Proof`] (the passphrase, or a
+//! signature by an enrolled approval key): a connection alone grants nothing. Unknown fields and unknown message types are
 //! rejected, so a request meant for one endpoint cannot be parsed by the other.
 
 use serde::{Deserialize, Serialize};
@@ -104,12 +104,76 @@ pub struct HttpHeader {
 // Approver endpoint
 // ---------------------------------------------------------------------------
 
-/// Proof that the sender knows the vault passphrase. Checked on every approver request;
-/// the daemon verifies it by decrypting the vault and never stores it.
+/// Proof that the sender is the human. Checked on every approver request.
+///
+/// - `passphrase`: the daemon verifies it by decrypting the vault and never stores it.
+///   Every operation accepts it.
+/// - `key` (M13): a signature by an approval key enrolled in the vault (Windows Hello),
+///   over [`signed_message`]. Accepted only for [`ApproverOp::key_allowed`] operations
+///   while the vault is unlocked.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Proof {
+    Passphrase(SecretText),
+    Key(KeyProof),
+}
+
+/// A signature by an approval key. Hex throughout.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Proof {
-    pub passphrase: SecretText,
+pub struct KeyProof {
+    /// [`approval_key_id`] of the key.
+    pub key_id: String,
+    /// Unix seconds when it was signed; the daemon accepts a minute either way.
+    pub time: u64,
+    /// 16 random bytes; the daemon refuses a nonce it has seen.
+    pub nonce: String,
+    pub signature: String,
+}
+
+/// What an approval key signs: a fixed label, the key, time, nonce and the operation.
+/// The operation is the same JSON the request carries, so a signature for one operation
+/// cannot be reused for another.
+pub fn signed_message(key_id: &str, time: u64, nonce: &str, op: &ApproverOp) -> Vec<u8> {
+    let mut m = format!("credstore approval v1\n{key_id}\n{time}\n{nonce}\n").into_bytes();
+    // Serializing these types cannot fail (no maps with non-string keys).
+    m.extend(serde_json::to_vec(op).unwrap_or_default());
+    m
+}
+
+/// The id of an approval key: the first 16 bytes of the SHA-256 of its public key, hex.
+/// Computed by the daemon; the client computes the same to name its key.
+pub fn approval_key_id(sha256_of_public_key: &[u8]) -> String {
+    hex(&sha256_of_public_key[..16.min(sha256_of_public_key.len())])
+}
+
+/// Lowercase hex.
+pub fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    bytes.iter().fold(String::new(), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    })
+}
+
+/// Inverse of [`hex`]; `None` for odd length or a non-hex character.
+pub fn unhex(s: &str) -> Option<Vec<u8>> {
+    if !s.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
+        .collect()
+}
+
+/// An approval key enrolled in the vault, as `status` lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalKeyInfo {
+    pub id: String,
+    pub label: String,
+    pub created: String,
 }
 
 /// A request on the approver endpoint. The proof is mandatory by construction.
@@ -150,6 +214,31 @@ pub enum ApproverOp {
     },
     /// Human-initiated `credstore run`: approved in place by the proof on this request.
     AdminRun(RunRequest),
+    /// Enrol an approval key (M13): a DER SubjectPublicKeyInfo of an RSA key that signs
+    /// with PKCS#1 v1.5 and SHA-256 (what Windows Hello makes), hex. Passphrase only.
+    AddApprovalKey {
+        label: String,
+        public_key: String,
+    },
+    /// Remove an enrolled approval key. Passphrase only.
+    RemoveApprovalKey {
+        id: String,
+    },
+}
+
+impl ApproverOp {
+    /// Operations an approval key may authorize: watching, deciding, status and lock.
+    /// Unlocking, changing secrets or keys, and `credstore run` need the passphrase.
+    pub fn key_allowed(&self) -> bool {
+        matches!(
+            self,
+            Self::SubscribePending
+                | Self::Approve { .. }
+                | Self::Deny { .. }
+                | Self::Status
+                | Self::Lock
+        )
+    }
 }
 
 /// What the human approved.
@@ -174,7 +263,7 @@ pub enum Response {
     HttpResult(HttpResult),
     Denied { reason: String },
     Pending { requests: Vec<PendingRequest> },
-    Status(StatusInfo),
+    Status(Box<StatusInfo>),
     Ok,
     Error { code: ErrorCode, message: String },
 }
@@ -320,6 +409,9 @@ pub struct StatusInfo {
     /// Memory hardening the daemon applied at startup.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hardening: Vec<HardeningReport>,
+    /// Approval keys enrolled in the vault (M13).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub approval_keys: Vec<ApprovalKeyInfo>,
 }
 
 /// One memory hardening feature and whether it is active in the daemon.

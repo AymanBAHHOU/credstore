@@ -4,9 +4,7 @@ use tokio::io::AsyncWriteExt;
 const FAKE: &str = "FAKE-SECRET-VALUE-12345";
 
 fn proof() -> Proof {
-    Proof {
-        passphrase: SecretText::new("fake passphrase".into()),
-    }
+    Proof::Passphrase(SecretText::new("fake passphrase".into()))
 }
 
 fn run_request() -> RunRequest {
@@ -186,7 +184,7 @@ fn responses_round_trip() {
             truncated: false,
             redactions: 1,
         }),
-        Response::Status(StatusInfo {
+        Response::Status(Box::new(StatusInfo {
             locked: true,
             dev_mode: true,
             pending: 0,
@@ -199,7 +197,12 @@ fn responses_round_trip() {
                 active: false,
                 detail: Some("not applied".into()),
             }],
-        }),
+            approval_keys: vec![ApprovalKeyInfo {
+                id: "00112233445566778899aabbccddeeff".into(),
+                label: "Windows Hello on PC".into(),
+                created: "2026-11-07T12:00:00Z".into(),
+            }],
+        })),
         Response::Ok,
         Response::Error {
             code: ErrorCode::Unauthorized,
@@ -372,4 +375,55 @@ async fn read_detects_truncated_frames() {
         read_frame(&mut b).await,
         Err(FrameError::Truncated)
     ));
+}
+
+#[test]
+fn approval_key_proofs_round_trip_and_keep_the_passphrase_format() {
+    // A passphrase proof is still `{"passphrase": "..."}` on the wire.
+    let json = serde_json::to_string(&proof()).unwrap();
+    assert_eq!(json, r#"{"passphrase":"fake passphrase"}"#);
+    let key = Proof::Key(KeyProof {
+        key_id: "00112233445566778899aabbccddeeff".into(),
+        time: 1_800_000_000,
+        nonce: "ab".repeat(16),
+        signature: "cd".repeat(256),
+    });
+    for op in [
+        ApproverOp::Status,
+        ApproverOp::AddApprovalKey {
+            label: "Windows Hello on PC".into(),
+            public_key: "3082".into(),
+        },
+        ApproverOp::RemoveApprovalKey {
+            id: "00112233445566778899aabbccddeeff".into(),
+        },
+    ] {
+        round_trip(ApproverRequest {
+            proof: key.clone(),
+            op,
+        });
+    }
+}
+
+#[test]
+fn signed_messages_bind_the_operation_and_hex_round_trips() {
+    let a = signed_message("k", 1, "n", &ApproverOp::Status);
+    let b = signed_message("k", 1, "n", &ApproverOp::Lock);
+    assert_ne!(a, b);
+    assert_ne!(a, signed_message("k", 2, "n", &ApproverOp::Status));
+    assert!(a.starts_with(
+        b"credstore approval v1
+k
+1
+n
+"
+    ));
+    assert_eq!(
+        unhex(&hex(&[0, 1, 0xab, 0xff])).unwrap(),
+        vec![0, 1, 0xab, 0xff]
+    );
+    assert!(unhex("abc").is_none());
+    assert!(unhex("zz").is_none());
+    assert!(ApproverOp::Status.key_allowed());
+    assert!(!ApproverOp::Unlock.key_allowed());
 }

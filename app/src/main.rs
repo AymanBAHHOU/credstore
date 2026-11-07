@@ -162,6 +162,14 @@ async fn decide(
     decision: Decision,
     passphrase: String,
 ) -> CmdResult<Decided> {
+    // No passphrase: confirm with Windows Hello (the UI offers this only with a key).
+    if passphrase.is_empty() {
+        return state
+            .api
+            .decide_with_hello(&id, decision)
+            .await
+            .map_err(err);
+    }
     state
         .api
         .decide(&id, decision, secret(passphrase))

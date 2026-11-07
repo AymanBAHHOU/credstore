@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use age::secrecy::SecretString;
 use credstore_os::{fs as osfs, OsError};
-use credstore_proto::{SecretInfo, SecretText};
+use credstore_proto::{ApprovalKeyInfo, SecretInfo, SecretText};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
@@ -56,6 +56,10 @@ pub enum VaultError {
     WeakPassphrase,
     #[error("no secret named {0}")]
     NoSuchSecret(String),
+    #[error("no approval key {0}")]
+    NoSuchKey(String),
+    #[error("the vault already holds {MAX_APPROVAL_KEYS} approval keys; remove one first")]
+    TooManyKeys,
     #[error(transparent)]
     Input(#[from] InputError),
     #[error("encrypting the vault failed")]
@@ -76,6 +80,20 @@ pub struct Entry {
     pub updated: String,
 }
 
+/// An approval key (M13), stored inside the encrypted vault so nobody without the
+/// passphrase can add one: a DER SubjectPublicKeyInfo, hex (see
+/// `ApproverOp::AddApprovalKey`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalKey {
+    pub label: String,
+    pub public_key: String,
+    pub created: String,
+}
+
+/// Most approval keys a vault holds.
+pub const MAX_APPROVAL_KEYS: usize = 16;
+
 /// What `set` did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SetOutcome {
@@ -89,6 +107,7 @@ pub struct SetOutcome {
 #[derive(Debug, Clone, Default)]
 pub struct VaultContents {
     secrets: BTreeMap<String, Entry>,
+    approval_keys: BTreeMap<String, ApprovalKey>,
 }
 
 impl VaultContents {
@@ -169,6 +188,51 @@ impl VaultContents {
         n
     }
 
+    /// The approval key with this id.
+    pub fn approval_key(&self, id: &str) -> Option<&ApprovalKey> {
+        self.approval_keys.get(id)
+    }
+
+    pub fn approval_keys(&self) -> Vec<ApprovalKeyInfo> {
+        self.approval_keys
+            .iter()
+            .map(|(id, k)| ApprovalKeyInfo {
+                id: id.clone(),
+                label: k.label.clone(),
+                created: k.created.clone(),
+            })
+            .collect()
+    }
+
+    /// Add (or relabel) an approval key under `id`. The caller has checked the key.
+    pub fn add_approval_key(
+        &mut self,
+        id: &str,
+        label: &str,
+        public_key: &str,
+    ) -> Result<(), VaultError> {
+        names::validate_description(label)?;
+        if !self.approval_keys.contains_key(id) && self.approval_keys.len() >= MAX_APPROVAL_KEYS {
+            return Err(VaultError::TooManyKeys);
+        }
+        self.approval_keys.insert(
+            id.to_owned(),
+            ApprovalKey {
+                label: label.to_owned(),
+                public_key: public_key.to_owned(),
+                created: crate::util::now_rfc3339(),
+            },
+        );
+        Ok(())
+    }
+
+    pub fn remove_approval_key(&mut self, id: &str) -> Result<(), VaultError> {
+        self.approval_keys
+            .remove(id)
+            .map(drop)
+            .ok_or_else(|| VaultError::NoSuchKey(id.to_owned()))
+    }
+
     pub fn remove(&mut self, name: &str) -> Result<(), VaultError> {
         names::validate_name(name)?;
         self.secrets
@@ -182,6 +246,8 @@ impl VaultContents {
 struct VaultFileRef<'a> {
     v: u32,
     secrets: &'a BTreeMap<String, Entry>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    approval_keys: &'a BTreeMap<String, ApprovalKey>,
 }
 
 #[derive(Deserialize)]
@@ -189,6 +255,8 @@ struct VaultFileRef<'a> {
 struct VaultFile {
     v: u32,
     secrets: BTreeMap<String, Entry>,
+    #[serde(default)]
+    approval_keys: BTreeMap<String, ApprovalKey>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -292,6 +360,7 @@ impl Vault {
         }
         Ok(VaultContents {
             secrets: file.secrets,
+            approval_keys: file.approval_keys,
         })
     }
 
@@ -308,6 +377,7 @@ impl Vault {
             &VaultFileRef {
                 v: VAULT_VERSION,
                 secrets: &contents.secrets,
+                approval_keys: &contents.approval_keys,
             },
         )
         .map_err(|_| VaultError::Encrypt)?;

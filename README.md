@@ -143,6 +143,18 @@ MemoryDenyWriteExecute=no
 On macOS, folders under `~/Desktop`, `~/Documents` and `~/Downloads` are also protected by
 macOS privacy controls; keep projects elsewhere (for example `~/code`).
 
+### Approve with Windows Hello
+
+```bash
+credstore hello enrol     # asks for the passphrase, then Windows Hello
+```
+
+After that, `credstore watch` and the desktop app confirm each approval with Windows
+Hello (face, fingerprint or PIN) while the vault is unlocked. Unlocking, changing
+secrets and `credstore run` still take the passphrase, and the passphrase always works
+when Hello is cancelled. `credstore hello remove` undoes it. Touch ID on macOS is not
+supported yet.
+
 ## Use with Claude Code
 
 ```bash
@@ -280,7 +292,9 @@ How:
   user. `doctor` warns when it runs privileged.
 - **A compromised OS or malware running as root** (spec non-goal).
 - **Dev mode**, by design (see above).
-- **Shoulder-surfing your passphrase**, or a keylogger in your session.
+- **Shoulder-surfing your passphrase**, or a keylogger in your session. On Windows,
+  `credstore hello enrol` lets Windows Hello confirm approvals, so the passphrase is
+  typed once per unlock instead of for every decision.
 - **Over-broad secrets.** Use scoped, low-privilege keys where the provider has them.
 - **Keys in memory are not locked.** The daemon disables core dumps and debugger attach
   where the OS allows it, but does not `mlock` / `VirtualLock` the vault, so it can reach

@@ -55,3 +55,7 @@ workspace = true
 [[test]]
 name = "m12_appcontainer"
 path = "m12_appcontainer.rs"
+
+[[test]]
+name = "m13_approval_keys"
+path = "m13_approval_keys.rs"

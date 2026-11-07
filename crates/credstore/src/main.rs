@@ -69,6 +69,11 @@ enum Command {
     },
     /// Approval TUI. Needs a real terminal.
     Watch,
+    /// Approve with Windows Hello instead of typing the passphrase each time.
+    Hello {
+        #[command(subcommand)]
+        action: HelloAction,
+    },
     /// Relock the vault now and zeroize it in daemon memory.
     Lock,
     /// Show daemon status.
@@ -86,6 +91,19 @@ enum Command {
     Mcp,
     /// Check the install: users, permissions, endpoints, sandbox, hardening.
     Doctor,
+}
+
+#[derive(Debug, Subcommand)]
+enum HelloAction {
+    /// Create a Windows Hello key and enrol it in the vault (asks for the passphrase).
+    #[command(alias = "enroll")]
+    Enrol {
+        /// Name shown in `credstore status` (default: this computer's name).
+        #[arg(long)]
+        label: Option<String>,
+    },
+    /// Remove the key from the vault and from Windows Hello.
+    Remove,
 }
 
 #[derive(Debug, Subcommand)]
@@ -166,6 +184,12 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
             (None, false) => commands::audit_show(platform.audit_log(), &mut out),
         },
         Command::Watch => credstore::watch::watch(&client, &prompt, &mut out).await,
+        Command::Hello { action } => match action {
+            HelloAction::Enrol { label } => {
+                commands::hello_enrol(&client, label, &prompt, &mut msg).await
+            }
+            HelloAction::Remove => commands::hello_remove(&client, &prompt, &mut msg).await,
+        },
         Command::Mcp => credstore::mcp::serve(client).await,
         Command::Doctor => {
             let report = credstore::doctor::doctor(&client, &prompt, &mut out).await?;

@@ -75,6 +75,12 @@ reason on the approval screen; `sandbox = "require"` denies them.
 Windows Hello / Touch ID gates approvals, so the passphrase is not typed where a
 same-user keylogger could capture it. The passphrase remains as the fallback.
 
+Built for Windows: a Hello key enrolled with the passphrase signs each approval, and the
+daemon verifies the signature against the public key stored in the vault (a client's
+"Hello said yes" alone is not trusted). The passphrase is still needed to unlock, so it
+is typed once per unlock session. Touch ID waits for a signed macOS app (owner
+decision: Apple Developer account).
+
 ## M14: backup, recovery, rotation
 
 Encrypted vault backup and restore, an optional recovery key, and reminders for secrets

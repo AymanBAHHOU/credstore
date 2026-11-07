@@ -223,6 +223,68 @@ pub async fn status(client: &Client, p: &dyn Prompt, out: &mut dyn Write) -> any
         None => writeln!(out, "policy:  ok")?,
         Some(e) => writeln!(out, "policy:  NOT LOADED, every run is denied: {e}")?,
     }
+    for k in &s.approval_keys {
+        writeln!(
+            out,
+            "approval key: {} ({}, added {})",
+            k.id,
+            printable(&k.label),
+            k.created
+        )?;
+    }
+    Ok(())
+}
+
+/// `credstore hello enrol`: create a Windows Hello key and enrol it in the vault.
+pub async fn hello_enrol(
+    client: &Client,
+    label: Option<String>,
+    p: &dyn Prompt,
+    msg: &mut dyn Write,
+) -> anyhow::Result<()> {
+    if !credstore_os::approval_key::supported() {
+        bail!("approval keys need Windows Hello; on this system approvals use the passphrase");
+    }
+    if !credstore_os::approval_key::hello::available() {
+        bail!("Windows Hello is not set up for this user (Settings > Accounts > Sign-in options)");
+    }
+    let pass = p.secret("Vault passphrase: ")?;
+    writeln!(
+        msg,
+        "Windows Hello will ask you to verify, to create the key."
+    )?;
+    let spki = credstore_os::approval_key::hello::create()?;
+    let label = label.unwrap_or_else(crate::approval::default_label);
+    let id = crate::approval::enrol(client, &spki, &label, pass).await?;
+    writeln!(
+        msg,
+        "Enrolled approval key {id}. `credstore watch` and the app now confirm approvals \
+         with Windows Hello while the vault is unlocked; unlocking, secrets and keys still \
+         need the passphrase."
+    )?;
+    Ok(())
+}
+
+/// `credstore hello remove`: remove this user's Hello key from the vault and from Hello.
+pub async fn hello_remove(
+    client: &Client,
+    p: &dyn Prompt,
+    msg: &mut dyn Write,
+) -> anyhow::Result<()> {
+    let spki = credstore_os::approval_key::hello::public_key()
+        .context("no credstore key in Windows Hello")?;
+    let id = credstore_os::approval_key::key_id(&spki);
+    let pass = p.secret("Vault passphrase: ")?;
+    match crate::approval::remove(client, &id, pass).await {
+        Ok(()) => writeln!(msg, "Removed approval key {id} from the vault.")?,
+        // Not enrolled here (another vault, or already removed): still delete it below.
+        Err(e) if e.to_string().contains("no approval key") => {
+            writeln!(msg, "Key {id} was not enrolled in this vault.")?
+        }
+        Err(e) => return Err(e),
+    }
+    credstore_os::approval_key::hello::delete()?;
+    writeln!(msg, "Deleted the key from Windows Hello.")?;
     Ok(())
 }
 

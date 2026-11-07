@@ -54,11 +54,23 @@ impl TestDaemon {
     pub async fn start_at(home: PathBuf) -> Self {
         let root = home.parent().expect("home has a parent").to_path_buf();
         let paths = PlatformPaths::dev_with_home(&home);
-        let daemon = credstored::start(DaemonConfig {
-            paths: paths.clone(),
-        })
-        .await
-        .expect("daemon starts");
+        // On a restart, the previous daemon's last connection task may still hold a
+        // pipe instance for a moment (Windows); retry briefly.
+        let mut tries = 0;
+        let daemon = loop {
+            match credstored::start(DaemonConfig {
+                paths: paths.clone(),
+            })
+            .await
+            {
+                Ok(d) => break d,
+                Err(e) if tries < 20 && format!("{e:#}").contains("already exists") => {
+                    tries += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                Err(e) => panic!("daemon starts: {e:#}"),
+            }
+        };
         Self {
             root,
             home,
@@ -173,7 +185,7 @@ impl TestDaemon {
         write_message(
             &mut s,
             &ApproverRequest {
-                proof: Proof { passphrase: pass() },
+                proof: Proof::Passphrase(pass()),
                 op: ApproverOp::SubscribePending,
             },
         )

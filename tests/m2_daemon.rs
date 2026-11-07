@@ -200,7 +200,7 @@ async fn agent_endpoint_rejects_approver_requests() {
     write_message(
         &mut s,
         &ApproverRequest {
-            proof: Proof { passphrase: pass() },
+            proof: Proof::Passphrase(pass()),
             op: ApproverOp::Unlock,
         },
     )

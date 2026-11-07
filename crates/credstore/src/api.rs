@@ -41,6 +41,9 @@ pub struct Overview {
     /// Why the daemon could not be reached, with what to do.
     pub error: Option<String>,
     pub secrets: Vec<SecretInfo>,
+    /// This user has a credstore key in Windows Hello (M13): decisions can be confirmed
+    /// with Hello instead of the passphrase.
+    pub hello: bool,
 }
 
 /// What the human decided about a pending request.
@@ -109,6 +112,7 @@ impl Api {
                     description: printable(&s.description),
                 })
                 .collect(),
+            hello: crate::approval::Hello::if_present().is_some(),
         }
     }
 
@@ -184,37 +188,77 @@ impl Api {
 
     /// Approve or deny one pending request.
     pub async fn decide(&self, id: &str, decision: Decision, pass: SecretText) -> Result<Decided> {
-        let request_id = RequestId(id.to_owned());
-        let op = match decision {
-            Decision::Once => ApproverOp::Approve {
-                request_id,
-                scope: GrantScope::Once,
-            },
-            Decision::Session { ttl_secs } => ApproverOp::Approve {
-                request_id,
-                scope: GrantScope::Session { ttl_secs },
-            },
-            Decision::Deny => ApproverOp::Deny { request_id },
-        };
-        Ok(match self.client.approver(op, pass).await? {
-            Response::Ok => Decided::Done,
-            Response::Error {
-                code: ErrorCode::Unauthorized,
-                ..
-            } => Decided::WrongPassphrase,
-            Response::Error {
-                code: ErrorCode::RateLimited,
-                message,
-            } => Decided::RateLimited {
-                message: printable(&message),
-            },
-            Response::Error { message, .. } => Decided::Failed {
-                message: printable(&message),
-            },
-            other => return Err(response_error(other)),
-        })
+        let op = decision_op(id, decision);
+        decided(self.client.approver(op, pass).await?)
     }
 
+    /// Like [`Api::decide`], confirmed with Windows Hello (Windows shows its own dialog).
+    /// The daemon refuses it while the vault is locked; the human then uses the
+    /// passphrase.
+    pub async fn decide_with_hello(&self, id: &str, decision: Decision) -> Result<Decided> {
+        let op = decision_op(id, decision);
+        let signed = op.clone();
+        let proof = tokio::task::spawn_blocking(move || {
+            crate::approval::key_proof(&crate::approval::Hello, &signed)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("Windows Hello: {e}"))?;
+        let proof = match proof {
+            Ok(p) => p,
+            Err(e) => {
+                return Ok(Decided::Failed {
+                    message: printable(&format!("{e:#}")),
+                })
+            }
+        };
+        Ok(match self.client.approver_with(op, proof).await? {
+            Response::Error {
+                code: ErrorCode::Unauthorized,
+                message,
+            } => Decided::Failed {
+                message: printable(&message),
+            },
+            other => decided(other)?,
+        })
+    }
+}
+
+fn decision_op(id: &str, decision: Decision) -> ApproverOp {
+    let request_id = RequestId(id.to_owned());
+    match decision {
+        Decision::Once => ApproverOp::Approve {
+            request_id,
+            scope: GrantScope::Once,
+        },
+        Decision::Session { ttl_secs } => ApproverOp::Approve {
+            request_id,
+            scope: GrantScope::Session { ttl_secs },
+        },
+        Decision::Deny => ApproverOp::Deny { request_id },
+    }
+}
+
+fn decided(resp: Response) -> Result<Decided> {
+    Ok(match resp {
+        Response::Ok => Decided::Done,
+        Response::Error {
+            code: ErrorCode::Unauthorized,
+            ..
+        } => Decided::WrongPassphrase,
+        Response::Error {
+            code: ErrorCode::RateLimited,
+            message,
+        } => Decided::RateLimited {
+            message: printable(&message),
+        },
+        Response::Error { message, .. } => Decided::Failed {
+            message: printable(&message),
+        },
+        other => return Err(response_error(other)),
+    })
+}
+
+impl Api {
     /// Subscribe to pending requests and call `on_update` with the full list each time it
     /// changes. Returns when the connection ends (an error says why).
     pub async fn watch(
@@ -226,7 +270,7 @@ impl Api {
         write_message(
             &mut stream,
             &ApproverRequest {
-                proof: Proof { passphrase: pass },
+                proof: Proof::Passphrase(pass),
                 op: ApproverOp::SubscribePending,
             },
         )

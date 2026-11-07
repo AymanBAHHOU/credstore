@@ -3,6 +3,11 @@
 //! Every answer is typed on the controlling terminal (`Prompt` reads `/dev/tty` or the
 //! Windows console, never stdin), and every approval or denial sends a fresh passphrase
 //! proof, so an agent that can write to this process's stdin cannot approve anything.
+//!
+//! M13: with a Windows Hello key enrolled, each decision is signed by Hello instead
+//! (Windows asks for a face, fingerprint or PIN in its own dialog). If Hello is
+//! cancelled or the daemon refuses the key (the vault is locked), the passphrase is
+//! asked as before.
 
 use std::collections::HashSet;
 use std::io::Write;
@@ -14,6 +19,7 @@ use credstore_proto::{
     PendingRequest, Proof, Response,
 };
 
+use crate::approval::{self, Hello, KeySigner};
 use crate::client::{response_error, Client};
 use crate::commands::{printable, Prompt};
 
@@ -23,27 +29,55 @@ terminal, never read from stdin";
 /// Show pending requests as they arrive and ask the human about each one. Runs until the
 /// connection drops or input fails (Ctrl-C ends the process).
 pub async fn watch(client: &Client, p: &dyn Prompt, out: &mut dyn Write) -> anyhow::Result<()> {
+    let hello = Hello::if_present();
+    watch_with(client, p, out, hello.as_ref().map(|h| h as &dyn KeySigner)).await
+}
+
+/// [`watch`] with an explicit approval key (or none: passphrase only).
+pub async fn watch_with(
+    client: &Client,
+    p: &dyn Prompt,
+    out: &mut dyn Write,
+    signer: Option<&dyn KeySigner>,
+) -> anyhow::Result<()> {
     if !p.has_terminal() {
         bail!(NO_TERMINAL);
     }
-    let passphrase = p.secret("Vault passphrase: ")?;
-    let mut stream = client.connect(EndpointKind::Approver).await?;
-    write_message(
-        &mut stream,
-        &ApproverRequest {
-            proof: Proof { passphrase },
-            op: ApproverOp::SubscribePending,
-        },
-    )
-    .await
-    .context("subscribing to pending requests")?;
+    let mut subscribed = None;
+    if let Some(s) = signer {
+        writeln!(out, "Verify with {} to start watching.", s.name())?;
+        match subscribe(
+            client,
+            approval::key_proof(s, &ApproverOp::SubscribePending),
+        )
+        .await
+        {
+            Ok((stream, Response::Error { message, .. })) => {
+                drop(stream);
+                writeln!(out, "{}: {}", s.name(), printable(&message))?;
+            }
+            Ok(ok) => subscribed = Some(ok),
+            Err(e) => writeln!(out, "{}: {}", s.name(), printable(&format!("{e:#}")))?,
+        }
+    }
+    let (mut stream, mut next) = match subscribed {
+        Some((stream, first)) => (stream, Some(first)),
+        None => {
+            let passphrase = p.secret("Vault passphrase: ")?;
+            let (stream, first) = subscribe(client, Ok(Proof::Passphrase(passphrase))).await?;
+            (stream, Some(first))
+        }
+    };
 
     let mut first = true;
     let mut handled: HashSet<String> = HashSet::new();
     loop {
-        let resp: Response = read_message(&mut stream)
-            .await
-            .context("lost the connection to credstored")?;
+        let resp: Response = match next.take() {
+            Some(r) => r,
+            None => read_message(&mut stream)
+                .await
+                .context("lost the connection to credstored")?,
+        };
         let requests = match resp {
             Response::Pending { requests } => requests,
             other => return Err(response_error(other)),
@@ -56,10 +90,35 @@ pub async fn watch(client: &Client, p: &dyn Prompt, out: &mut dyn Write) -> anyh
         for req in requests {
             if handled.insert(req.id.0.clone()) {
                 show(&req, out)?;
-                decide(client, p, &req, out).await?;
+                decide(client, p, signer, &req, out).await?;
             }
         }
     }
+}
+
+/// Send a subscription with `proof` and read the first answer.
+async fn subscribe(
+    client: &Client,
+    proof: anyhow::Result<Proof>,
+) -> anyhow::Result<(
+    <credstore_os::Platform as credstore_os::Ipc>::Stream,
+    Response,
+)> {
+    let proof = proof?;
+    let mut stream = client.connect(EndpointKind::Approver).await?;
+    write_message(
+        &mut stream,
+        &ApproverRequest {
+            proof,
+            op: ApproverOp::SubscribePending,
+        },
+    )
+    .await
+    .context("subscribing to pending requests")?;
+    let first = read_message(&mut stream)
+        .await
+        .context("lost the connection to credstored")?;
+    Ok((stream, first))
 }
 
 /// Everything the human needs to decide, as display text. All agent-supplied text goes
@@ -234,6 +293,7 @@ pub fn show(r: &PendingRequest, out: &mut dyn Write) -> anyhow::Result<()> {
 async fn decide(
     client: &Client,
     p: &dyn Prompt,
+    signer: Option<&dyn KeySigner>,
     r: &PendingRequest,
     out: &mut dyn Write,
 ) -> anyhow::Result<()> {
@@ -276,6 +336,20 @@ async fn decide(
                 continue;
             }
         };
+        if let Some(s) = signer {
+            writeln!(out, "Confirm with {}...", s.name())?;
+            match approval::send(client, s, op.clone()).await {
+                Ok(Response::Ok) => {
+                    writeln!(out, "{done}")?;
+                    return Ok(());
+                }
+                Ok(Response::Error { message, .. }) => {
+                    writeln!(out, "{}: {}", s.name(), printable(&message))?;
+                }
+                Ok(other) => return Err(response_error(other)),
+                Err(e) => writeln!(out, "{}: {}", s.name(), printable(&format!("{e:#}")))?,
+            }
+        }
         let passphrase = p.secret("Passphrase to confirm: ")?;
         match client.approver(op, passphrase).await? {
             Response::Ok => {

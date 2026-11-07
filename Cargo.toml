@@ -44,10 +44,19 @@ toml = "1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # HTTPS client for http_request (M11): rustls with the Mozilla roots, no gzip, no cookies.
 ureq = { version = "3.5", default-features = false, features = ["rustls"] }
+# Windows Hello (M13): the WinRT KeyCredentialManager, which windows-sys does not cover.
+windows = { version = "0.62", features = [
+    "Foundation",
+    "Security_Credentials",
+    "Security_Cryptography",
+    "Security_Cryptography_Core",
+    "Storage_Streams",
+] }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
     "Win32_Security_Isolation",
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
