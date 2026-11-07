@@ -116,7 +116,10 @@ mod tests {
         assert!(sddl.contains(&format!(";FR;;;{reader})")), "{sddl}");
         assert!(!sddl.contains(&format!(";FA;;;{reader})")), "{sddl}");
         // The reader cannot write it.
-        assert!(std::fs::OpenOptions::new().append(true).open(&path).is_err());
+        assert!(std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .is_err());
         // It already exists: never reused.
         assert!(create_admin_file(&path, &reader).is_err());
         let _ = std::fs::remove_dir_all(&dir);

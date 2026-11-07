@@ -130,6 +130,17 @@ jobs:
           sudo bash ./deploy/install.sh --uninstall
           ! test -e /usr/local/bin/credstored
 
+      - name: No new logon needed (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          # M9: add the runner's own account, whose logon predates the groups. The users
+          # file gives it a pipe ACE of its own, so it connects at once. Done before the
+          # smoke test: the policy step below needs this account, and reinstalling
+          # restarts the service, which drops a prepared policy change.
+          .\deploy\install.ps1 -User "$env:USERDOMAIN\$env:USERNAME"
+          & "$env:ProgramFiles\credstore\credstore.exe" list
+          if ($LASTEXITCODE -ne 0) { throw 'credstore list failed for a user added after logon' }
       - name: Install and smoke test (Windows)
         if: runner.os == 'Windows'
         shell: powershell
@@ -154,15 +165,6 @@ jobs:
             -RedirectStandardOutput "$smoke\out.txt" -RedirectStandardError "$smoke\err.txt"
           Get-Content "$smoke\out.txt", "$smoke\err.txt"
           if ($p.ExitCode -ne 0) { throw "smoke test failed ($($p.ExitCode))" }
-      - name: No new logon needed (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          # M9: add the runner's own account, whose logon predates the groups. The
-          # users file gives it a pipe ACE of its own, so it connects at once.
-          .\deploy\install.ps1 -User "$env:USERDOMAIN\$env:USERNAME"
-          & "$env:ProgramFiles\credstore\credstore.exe" list
-          if ($LASTEXITCODE -ne 0) { throw 'credstore list failed for a user added after logon' }
       - name: Policy change as administrator (Windows)
         if: runner.os == 'Windows'
         shell: powershell
