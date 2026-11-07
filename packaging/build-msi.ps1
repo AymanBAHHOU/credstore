@@ -36,6 +36,7 @@ $msi = Join-Path $OutDir "credstore-$version-x64.msi"
 wix build -arch x64 -ext WixToolset.Util.wixext -ext WixToolset.UI.wixext `
     -d "Version=$version" -d "BinDir=$BinDir" -d "DeployDir=$(Join-Path $root 'deploy')" `
     -d "WithApp=$withApp" -d "AppExe=$AppExe" `
+    -d "IconFile=$(Join-Path $root 'app\icons\icon.ico')" `
     -o $msi (Join-Path $PSScriptRoot 'wix\credstore.wxs')
 if ($LASTEXITCODE -ne 0) { throw 'wix build failed' }
 Write-Host "built $msi"

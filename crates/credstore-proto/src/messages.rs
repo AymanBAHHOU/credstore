@@ -224,15 +224,40 @@ pub enum ApproverOp {
     RemoveApprovalKey {
         id: String,
     },
+    /// The desktop app's live view: a [`Feed`] now and after every change, until the
+    /// client hangs up. Streamed like `SubscribePending`.
+    SubscribeFeed,
+    /// Change one secret's rules in the policy file, then reload it. `None` leaves a
+    /// rule as it is; an empty list removes it (the secret then follows `[defaults]`).
+    /// Hosts set `network = "allow-list"`. Passphrase only.
+    SetSecretRules {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        allow_hosts: Option<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        allow_commands: Option<Vec<String>>,
+    },
+    /// Change `[defaults]` timers in the policy file, then reload it. `None` leaves a
+    /// setting as it is. Passphrase only.
+    SetDefaults {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_idle_secs: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        grant_ttl_secs: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        approval_timeout_secs: Option<u64>,
+    },
 }
 
 impl ApproverOp {
     /// Operations an approval key may authorize: watching, deciding, status and lock.
-    /// Unlocking, changing secrets or keys, and `credstore run` need the passphrase.
+    /// Unlocking, changing secrets, keys or policy, and `credstore run` need the
+    /// passphrase.
     pub fn key_allowed(&self) -> bool {
         matches!(
             self,
             Self::SubscribePending
+                | Self::SubscribeFeed
                 | Self::Approve { .. }
                 | Self::Deny { .. }
                 | Self::Status
@@ -264,6 +289,7 @@ pub enum Response {
     Denied { reason: String },
     Pending { requests: Vec<PendingRequest> },
     Status(Box<StatusInfo>),
+    Feed(Box<Feed>),
     Ok,
     Error { code: ErrorCode, message: String },
 }
@@ -412,6 +438,114 @@ pub struct StatusInfo {
     /// Approval keys enrolled in the vault (M13).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub approval_keys: Vec<ApprovalKeyInfo>,
+}
+
+/// What the desktop app shows, streamed by `SubscribeFeed`. Never holds a secret value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Feed {
+    pub pending: Vec<PendingRequest>,
+    /// Most recent first.
+    pub activity: Vec<ActivityEntry>,
+    /// `None` while the policy cannot be loaded (`policy_error` says why).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<PolicyInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_error: Option<String>,
+    pub locked: bool,
+}
+
+/// The policy as the app shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyInfo {
+    /// Where the policy file is.
+    pub path: String,
+    /// Whether the daemon can change the file (`SetSecretRules`, `SetDefaults`). On Linux
+    /// and macOS installs it belongs to root and is edited by hand.
+    pub editable: bool,
+    pub strict: bool,
+    pub session_idle_secs: u64,
+    pub grant_ttl_secs: u64,
+    pub approval_timeout_secs: u64,
+    /// Every secret in the vault, and every `[secret.NAME]` block, by name.
+    pub secrets: Vec<SecretRules>,
+}
+
+/// One secret's rules with `[defaults]` applied.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SecretRules {
+    pub name: String,
+    /// The policy has a `[secret.NAME]` block for it.
+    pub configured: bool,
+    pub network: NetworkPolicy,
+    /// Hosts it may be sent to (with `network = "allow-list"`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_hosts: Vec<String>,
+    /// Command patterns; `None` allows any command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_commands: Option<Vec<String>>,
+    /// Folder patterns; `None` allows any folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_dirs: Option<Vec<String>>,
+    pub require_approval: bool,
+    pub grant_ttl_secs: u64,
+}
+
+/// One line of the app's activity history, built from the audit log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityEntry {
+    /// Request id, or empty for vault and policy changes.
+    pub id: String,
+    /// When it started (RFC 3339).
+    pub ts: String,
+    pub kind: ActivityKind,
+    pub outcome: ActivityOutcome,
+    /// The command line, `METHOD URL`, or what changed.
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secrets: Vec<String>,
+    /// Why it was refused or denied, or how it ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// The host of an HTTP request (`host` or `host:port`), for an "allow this host" fix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// Who or what approved it: `human`, `grant`, `policy` or `admin`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityKind {
+    Run,
+    Http,
+    Vault,
+    Policy,
+    /// A wrong passphrase or a rejected key proof.
+    Auth,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityOutcome {
+    /// Waiting for the human.
+    Waiting,
+    /// Approved, not finished yet.
+    Running,
+    /// Refused by policy before the human was asked.
+    Refused,
+    /// Denied by the human, or timed out.
+    Denied,
+    Ok,
+    Failed,
+    /// A vault or policy change.
+    Changed,
 }
 
 /// One memory hardening feature and whether it is active in the daemon.

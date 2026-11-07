@@ -116,7 +116,7 @@ async fn a_locked_vault_needs_the_passphrase() {
 }
 
 #[tokio::test]
-async fn keys_cannot_unlock_change_secrets_or_keys() {
+async fn keys_cannot_unlock_change_secrets_keys_or_policy() {
     let (d, key, id) = ready("m13-scope").await;
     unlock(&d).await;
     for op in [
@@ -129,10 +129,41 @@ async fn keys_cannot_unlock_change_secrets_or_keys() {
             label: "x".into(),
             public_key: "00".into(),
         },
+        ApproverOp::SetSecretRules {
+            name: "API_KEY".into(),
+            allow_hosts: Some(vec!["evil.example".into()]),
+            allow_commands: None,
+        },
+        ApproverOp::SetDefaults {
+            session_idle_secs: Some(3600),
+            grant_ttl_secs: None,
+            approval_timeout_secs: None,
+        },
     ] {
         let r = approval::send(&d.client(), &key, op).await.unwrap();
         assert!(unauthorized(&r).contains("passphrase"), "{r:?}");
     }
+    d.stop().await;
+}
+
+#[tokio::test]
+async fn a_key_opens_the_apps_feed() {
+    use credstore_os::EndpointKind;
+    use credstore_proto::{read_message, write_message, ApproverRequest};
+    let (d, key, _) = ready("m13-feed").await;
+    unlock(&d).await;
+    let op = ApproverOp::SubscribeFeed;
+    let proof = approval::key_proof(&key, &op).unwrap();
+    let mut stream = d.connect(EndpointKind::Approver).await;
+    write_message(&mut stream, &ApproverRequest { proof, op })
+        .await
+        .unwrap();
+    let r: Response = read_message(&mut stream).await.unwrap();
+    let Response::Feed(f) = r else {
+        panic!("{r:?}")
+    };
+    assert!(!f.locked);
+    assert!(f.policy.is_some());
     d.stop().await;
 }
 

@@ -1,4 +1,5 @@
-//! credstore desktop app (M10): setup, approvals, secrets, folders, Claude Code, health.
+//! credstore desktop app (M10): setup, approvals, activity, secrets and where they may
+//! go, folders, Claude Code, health and security settings.
 //!
 //! A thin shell around `credstore::api`: every command below forwards to it, so the
 //! behaviour is tested with the rest of credstore. The app talks to the daemon like the
@@ -7,8 +8,9 @@
 //! strings from the page and are wrapped in `SecretText` at once; nothing returned to
 //! the page contains one.
 //!
-//! The window hides to the tray when closed, so approvals keep arriving. New requests
-//! raise an OS notification. `--dev` talks to a dev-mode daemon.
+//! The window hides to the tray when closed, so approvals keep arriving. A new request
+//! raises an OS notification and brings the window to the front. `--dev` talks to a
+//! dev-mode daemon.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -16,11 +18,10 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use credstore::api::{Api, Decided, Decision, Overview, Saved};
+use credstore::api::{Api, Auth, Decided, Decision, FeedView, Overview, Saved};
 use credstore::client::Client;
 use credstore::doctor::Report;
 use credstore::setup::ClaudeState;
-use credstore::watch::RequestView;
 use credstore_os::{Mode, Platform};
 use credstore_proto::SecretText;
 use tauri::menu::{Menu, MenuItem};
@@ -96,29 +97,42 @@ async fn lock(state: State<'_, AppState>, passphrase: String) -> CmdResult<()> {
     state.api.lock(secret(passphrase)).await.map_err(err)
 }
 
-/// Start receiving pending requests. The page gets `pending` events with the full list
-/// and a `watch-ended` event (with the reason) if the subscription stops.
+/// Start the live feed (pending requests, activity, policy). An empty passphrase means
+/// Windows Hello. The page gets a `feed` event after every change, and `watch-ended`
+/// (with the reason) if the subscription stops later. Resolves once the first update
+/// arrived, or with the error that stopped it.
 #[tauri::command]
 async fn start_watching(
     app: AppHandle,
     state: State<'_, AppState>,
     passphrase: String,
 ) -> CmdResult<()> {
-    // Check first, so a typo is reported here rather than as a dropped subscription.
-    state
-        .api
-        .check_passphrase(secret(passphrase.clone()))
-        .await
-        .map_err(err)?;
+    let auth = if passphrase.is_empty() {
+        Auth::Hello
+    } else {
+        Auth::Passphrase(secret(passphrase))
+    };
     let api = state.api.clone();
     let handle = app.clone();
+    let (first_tx, first_rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
+    let first_tx = std::sync::Arc::new(Mutex::new(Some(first_tx)));
+    let on_first = first_tx.clone();
     let task = tauri::async_runtime::spawn(async move {
-        let mut seen: HashSet<String> = HashSet::new();
+        let mut seen: Option<HashSet<String>> = None;
         let notify = handle.clone();
         let result = api
-            .watch(secret(passphrase), move |list: Vec<RequestView>| {
-                for r in &list {
+            .feed(auth, move |view: FeedView| {
+                let seen = seen.get_or_insert_with(|| {
+                    if let Some(tx) = on_first.lock().unwrap().take() {
+                        let _ = tx.send(Ok(()));
+                    }
+                    // Requests already waiting when watching starts are not new.
+                    view.pending.iter().map(|r| r.id.clone()).collect()
+                });
+                let mut fresh = false;
+                for r in &view.pending {
                     if seen.insert(r.id.clone()) {
+                        fresh = true;
                         let _ = notify
                             .notification()
                             .builder()
@@ -131,20 +145,87 @@ async fn start_watching(
                             .show();
                     }
                 }
-                seen.retain(|id| list.iter().any(|r| &r.id == id));
-                let _ = notify.emit("pending", &list);
+                seen.retain(|id| view.pending.iter().any(|r| &r.id == id));
+                let _ = notify.emit("feed", &view);
+                if fresh {
+                    bring_to_front(&notify);
+                }
             })
             .await;
         let reason = match result {
             Ok(()) => "the subscription ended".to_owned(),
             Err(e) => format!("{e:#}"),
         };
-        let _ = handle.emit("watch-ended", reason);
+        match first_tx.lock().unwrap().take() {
+            Some(tx) => {
+                let _ = tx.send(Err(reason));
+            }
+            None => {
+                let _ = handle.emit("watch-ended", reason);
+            }
+        }
     });
     if let Some(old) = state.watching.lock().unwrap().replace(task) {
         old.abort();
     }
-    Ok(())
+    match first_rx.await {
+        Ok(r) => r,
+        Err(_) => Err("the subscription ended".into()),
+    }
+}
+
+/// Stop the live feed.
+#[tauri::command]
+fn stop_watching(state: State<'_, AppState>) {
+    if let Some(old) = state.watching.lock().unwrap().take() {
+        old.abort();
+    }
+}
+
+#[tauri::command]
+async fn set_secret_rules(
+    state: State<'_, AppState>,
+    name: String,
+    allow_hosts: Option<Vec<String>>,
+    allow_commands: Option<Vec<String>>,
+    passphrase: String,
+) -> CmdResult<()> {
+    state
+        .api
+        .set_secret_rules(&name, allow_hosts, allow_commands, secret(passphrase))
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+async fn set_defaults(
+    state: State<'_, AppState>,
+    session_idle_secs: Option<u64>,
+    grant_ttl_secs: Option<u64>,
+    approval_timeout_secs: Option<u64>,
+    passphrase: String,
+) -> CmdResult<()> {
+    state
+        .api
+        .set_defaults(
+            session_idle_secs,
+            grant_ttl_secs,
+            approval_timeout_secs,
+            secret(passphrase),
+        )
+        .await
+        .map_err(err)
+}
+
+/// Turn Windows Hello approval on (Windows asks the user to verify) or off.
+#[tauri::command]
+async fn set_hello(state: State<'_, AppState>, on: bool, passphrase: String) -> CmdResult<()> {
+    let pass = secret(passphrase);
+    if on {
+        state.api.hello_enrol(pass).await.map_err(err)
+    } else {
+        state.api.hello_remove(pass).await.map_err(err)
+    }
 }
 
 fn short(s: &str) -> String {
@@ -252,6 +333,21 @@ fn show_main(app: &AppHandle) {
     }
 }
 
+/// Put the window in front of whatever the human is doing. Windows does not let a
+/// background app take the keyboard focus, so the window goes on top for a moment (it
+/// is then visible, though another app may keep the keyboard) and its taskbar button
+/// flashes.
+fn bring_to_front(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_always_on_top(true);
+        let _ = w.set_focus();
+        let _ = w.set_always_on_top(false);
+        let _ = w.request_user_attention(Some(tauri::UserAttentionType::Critical));
+    }
+}
+
 fn main() {
     let dev = std::env::args().any(|a| a == "--dev");
     let mode = if dev { Mode::Dev } else { Mode::Installed };
@@ -285,6 +381,10 @@ fn main() {
             remove_secret,
             lock,
             start_watching,
+            stop_watching,
+            set_secret_rules,
+            set_defaults,
+            set_hello,
             decide,
             pick_folder,
             grant_plan,

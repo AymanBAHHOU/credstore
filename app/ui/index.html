@@ -1,132 +1,218 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>credstore</title>
-  <link rel="stylesheet" href="style.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>credstore</title>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header>
-    <div class="brand">
-      <img src="icon.png" alt="" width="28" height="28">
-      <span>credstore</span>
-    </div>
-    <div id="status" class="pill">connecting…</div>
-  </header>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="mark" viewBox="0 0 64 64">
+      <rect x="1" y="1" width="62" height="62" rx="15" fill="#0E0F12" stroke="#3A4048" stroke-width="2"/>
+      <rect x="13" y="27" width="38" height="10" rx="5" fill="#DCE3EA"/>
+      <circle cx="47" cy="16" r="5" fill="#D40000"/>
+    </symbol>
+    <symbol id="i-check" viewBox="0 0 16 16"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-x" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 16 16"><path d="M2 4.5a1 1 0 0 1 1-1h3l1.5 1.5H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></symbol>
+  </defs>
+</svg>
 
-  <nav id="tabs">
-    <button data-tab="approvals" class="active">Approvals <span id="pending-count" class="count" hidden></span></button>
-    <button data-tab="secrets">Secrets</button>
-    <button data-tab="folders">Folders</button>
-    <button data-tab="claude">Claude Code</button>
-    <button data-tab="health">Health</button>
+<header class="top">
+  <div class="brand"><svg aria-hidden="true"><use href="#mark"/></svg><span>credstore</span></div>
+  <nav class="nav" aria-label="Sections">
+    <button data-mod="approvals" aria-current="page">Approvals <span class="badge" id="badge" hidden>0</span></button>
+    <button data-mod="activity">Activity</button>
+    <button data-mod="secrets">Secrets</button>
+    <button data-mod="folders">Folders</button>
+    <button data-mod="claude">Claude Code</button>
+    <button data-mod="health">Health</button>
+    <button data-mod="security">Security</button>
   </nav>
+  <div class="status">
+    <span class="pill" id="service-pill"><span class="dot" id="service-dot"></span><span id="service-text">Connecting…</span></span>
+    <span class="pill" id="vault-pill" hidden><span class="dot" id="vault-dot"></span><span id="vault-text"></span></span>
+    <button class="pill" id="lock" hidden><svg width="14" height="14" aria-hidden="true"><use href="#i-lock"/></svg>Lock</button>
+  </div>
+</header>
 
-  <main>
-    <section id="unreachable" class="card warn" hidden>
-      <h2>credstore's service is not answering</h2>
-      <p id="unreachable-detail"></p>
-      <button id="retry">Try again</button>
-    </section>
+<main>
+  <!-- Shown on every page while the daemon cannot be reached. -->
+  <div class="box notice alert" id="unreachable" hidden>
+    <span class="dot red"></span>
+    <p><strong>credstore's service is not reachable.</strong> <span id="unreachable-detail"></span></p>
+    <div class="acts"><button class="btn sm" id="retry">Try again</button><button class="btn sm primary" data-goto="health">Open Health</button></div>
+  </div>
 
-    <section id="tab-approvals" class="tab">
-      <div id="watch-start" class="card">
-        <h2>Receive approval requests</h2>
-        <p>Agents' requests to use your secrets appear here. Enter your vault passphrase to
-          start receiving them. You will still confirm each decision with the passphrase.</p>
-        <form id="watch-form" class="row">
-          <input id="watch-pass" type="password" autocomplete="off" placeholder="Vault passphrase" required>
-          <button type="submit">Start</button>
-        </form>
-        <p id="watch-msg" class="msg"></p>
-      </div>
-      <div id="watch-on" hidden>
-        <p class="muted" id="watch-state">Waiting for requests. Closing the window keeps credstore running in the tray.</p>
-        <div id="requests"></div>
-      </div>
-    </section>
+  <!-- ================= APPROVALS ================= -->
+  <section class="module" id="m-approvals">
+    <div class="head"><div><h1>Approvals</h1><p class="lede">An agent wants to use one of your secrets. Read what will be sent and where, then decide. Nothing runs until you do.</p></div></div>
+    <div class="connect-slot"></div>
+    <div id="requests"></div>
+    <div class="box idle" id="idle" hidden><span class="dot on"></span>No requests waiting. credstore keeps running in the tray and brings this window forward when an agent asks.</div>
+    <div id="refused"></div>
+    <p class="msg" id="approvals-msg"></p>
+  </section>
 
-    <section id="tab-secrets" class="tab" hidden>
-      <div id="create-vault" class="card" hidden>
-        <h2>Create your vault</h2>
-        <p>Choose a passphrase of at least 12 characters. There is no way to recover the vault
-          without it. If you already have a vault, skip this.</p>
-        <form id="vault-form" class="stack">
-          <input id="vault-pass" type="password" autocomplete="new-password" placeholder="New passphrase" required>
-          <input id="vault-repeat" type="password" autocomplete="new-password" placeholder="Repeat the passphrase" required>
-          <button type="submit">Create vault</button>
-        </form>
-        <p id="vault-msg" class="msg"></p>
-      </div>
-
-      <div class="card">
-        <h2>Secrets</h2>
-        <table id="secrets-table">
-          <thead><tr><th>Name</th><th>Description</th><th></th></tr></thead>
-          <tbody></tbody>
-        </table>
-        <p id="no-secrets" class="muted" hidden>No secrets yet.</p>
-      </div>
-
-      <div class="card">
-        <h2>Add or replace a secret</h2>
-        <p class="muted">The value is sent to credstore's service and never shown again.</p>
-        <form id="secret-form" class="stack">
-          <input id="secret-name" placeholder="NAME (letters, digits, _)" required pattern="[A-Za-z_][A-Za-z0-9_]*">
-          <input id="secret-desc" placeholder="Description (what it is for; agents see this)">
-          <input id="secret-value" type="password" autocomplete="off" placeholder="Value" required>
-          <input id="secret-pass" type="password" autocomplete="off" placeholder="Vault passphrase" required>
-          <button type="submit">Save</button>
-        </form>
-        <p id="secret-msg" class="msg"></p>
-      </div>
-    </section>
-
-    <section id="tab-folders" class="tab" hidden>
-      <div class="card">
-        <h2>Project folders</h2>
-        <p>Approved commands run as credstore's service account, which needs access to the
-          folders they run in. You own your project folders, so no admin rights are needed.</p>
-        <button id="pick-folder">Choose a folder…</button>
-        <div id="grant-plan" hidden>
-          <p>credstore will run, as you:</p>
-          <pre id="grant-commands"></pre>
-          <button id="grant-go">Grant access</button>
+  <!-- ================= ACTIVITY ================= -->
+  <section class="module" id="m-activity" hidden>
+    <div class="head"><div><h1>Activity</h1><p class="lede">Every request an agent made, what was decided, and what ran, from credstore's audit log. Values never appear here.</p></div></div>
+    <div class="connect-slot"></div>
+    <div id="activity-body" hidden>
+      <div class="toolbar">
+        <div class="segs" role="group" aria-label="Show" id="activity-filter">
+          <button class="seg" data-f="all" aria-pressed="true">All</button>
+          <button class="seg" data-f="approved" aria-pressed="false">Approved</button>
+          <button class="seg" data-f="denied" aria-pressed="false">Denied</button>
+          <button class="seg" data-f="refused" aria-pressed="false">Refused</button>
+          <button class="seg" data-f="changes" aria-pressed="false">Changes</button>
         </div>
-        <p id="grant-msg" class="msg"></p>
       </div>
-    </section>
-
-    <section id="tab-claude" class="tab" hidden>
-      <div class="card">
-        <h2>Claude Code</h2>
-        <ul id="claude-state" class="checks"></ul>
-        <button id="claude-connect">Connect Claude Code</button>
-        <p class="muted">Registers credstore for all folders (<code>claude mcp add --scope user</code>)
-          and adds deny rules so the agent cannot read <code>.env</code> files or credstore's
-          files. Your other settings are kept, and the old settings file is backed up.
-          Do not allowlist credstore's tools, so Claude Code asks you too.</p>
-        <p id="claude-msg" class="msg"></p>
+      <div class="box">
+        <table>
+          <thead><tr><th class="label">Time</th><th class="label">Outcome</th><th class="label">Request</th><th class="label">Secret</th></tr></thead>
+          <tbody id="activity-rows"></tbody>
+        </table>
+        <p class="empty" id="activity-empty" hidden>Nothing here yet.</p>
       </div>
-    </section>
+    </div>
+  </section>
 
-    <section id="tab-health" class="tab" hidden>
-      <div class="card">
-        <h2>Health check</h2>
-        <p>Checks the service, your access, the file permissions, and what protects your
-          secrets on this machine. With the passphrase it also shows the service's sandbox and
-          hardening.</p>
-        <form id="doctor-form" class="row">
-          <input id="doctor-pass" type="password" autocomplete="off" placeholder="Vault passphrase (optional)">
-          <button type="submit">Run</button>
-        </form>
-        <p id="doctor-summary" class="msg"></p>
-        <ul id="doctor-checks" class="checks"></ul>
+  <!-- ================= SECRETS ================= -->
+  <section class="module" id="m-secrets" hidden>
+    <div class="head">
+      <div><h1>Secrets</h1><p class="lede">Agents see only names and descriptions. Values go in once and never come back out.</p></div>
+      <div class="actions"><button class="btn" id="add-secret"><svg width="14" height="14" aria-hidden="true"><use href="#i-plus"/></svg>Add secret</button></div>
+    </div>
+
+    <form class="box" id="vault-form" hidden>
+      <div class="sec">
+        <h2>Create your vault</h2>
+        <p class="help">The passphrase encrypts every secret and confirms every approval. At least 12 characters. It cannot be recovered, so keep it somewhere safe.</p>
+        <div class="grid2 gap-top">
+          <div><label class="label field-l" for="vault-pass">Passphrase</label><input class="input" id="vault-pass" type="password" autocomplete="new-password" required></div>
+          <div><label class="label field-l" for="vault-repeat">Repeat it</label><input class="input" id="vault-repeat" type="password" autocomplete="new-password" required></div>
+        </div>
       </div>
-    </section>
-  </main>
+      <div class="savebar"><span class="grow msg" id="vault-msg"></span><button class="btn primary">Create vault</button></div>
+    </form>
 
-  <script src="app.js"></script>
+    <form class="box" id="secret-form" hidden>
+      <div class="sec">
+        <h2 id="secret-form-title">Add a secret</h2>
+        <p class="help">Agents refer to it by name. The value is encrypted at once and never shown again, here or anywhere.</p>
+        <div class="grid2 gap-top">
+          <div><label class="label field-l" for="secret-name">Name</label><input class="input mono" id="secret-name" placeholder="STRIPE_KEY" autocomplete="off" spellcheck="false" required></div>
+          <div><label class="label field-l" for="secret-desc">Description · agents see this</label><input class="input" id="secret-desc" placeholder="What it is for" autocomplete="off"></div>
+        </div>
+        <div class="gap-top"><label class="label field-l" for="secret-value">Value</label><input class="input mono" id="secret-value" type="password" autocomplete="off" required></div>
+      </div>
+      <div class="savebar">
+        <span class="grow msg" id="secret-msg"></span>
+        <input class="input" id="secret-pass" type="password" autocomplete="off" placeholder="Passphrase to save" aria-label="Passphrase to save" required>
+        <button class="btn" type="button" id="secret-cancel">Cancel</button><button class="btn primary">Save</button>
+      </div>
+    </form>
+
+    <p class="msg" id="secrets-msg"></p>
+    <div class="connect-slot"></div>
+    <div class="box empty-box" id="no-secrets" hidden>No secrets yet. Add one, then tell your agent its name.</div>
+    <div class="split" id="secrets-split" hidden>
+      <div class="box slist" id="secret-list"></div>
+      <div id="secret-detail"></div>
+    </div>
+  </section>
+
+  <!-- ================= FOLDERS ================= -->
+  <section class="module" id="m-folders" hidden>
+    <div class="head"><div><h1>Folders</h1><p class="lede">Approved commands run as credstore's service account, inside a sandbox that can only work in folders you grant here. You own your project folders, so no admin rights are needed.</p></div></div>
+    <div class="box pad">
+      <div class="folder-row">
+        <div class="input mono folder" id="folder-shown"><svg width="16" height="16" aria-hidden="true"><use href="#i-folder"/></svg><span id="folder-path">No folder chosen</span></div>
+        <button class="btn" id="pick-folder">Choose a folder</button>
+      </div>
+      <div id="grant-plan" hidden>
+        <p class="plan-intro">credstore will run, as you:</p>
+        <pre class="cmd" id="grant-commands"></pre>
+        <div class="right"><button class="btn primary" id="grant-go">Grant access</button></div>
+      </div>
+      <p class="msg" id="grant-msg"></p>
+    </div>
+  </section>
+
+  <!-- ================= CLAUDE CODE ================= -->
+  <section class="module" id="m-claude" hidden>
+    <div class="head"><div><h1>Claude Code</h1><p class="lede">Lets Claude Code ask credstore for secrets, and stops it from reading <code>.env</code> files or credstore's own files directly.</p></div></div>
+    <div class="box">
+      <ul class="checks" id="claude-state"></ul>
+      <div class="decide"><span class="hint">Your other Claude Code settings are kept.</span><p class="msg" id="claude-msg"></p><button class="btn primary" id="claude-connect">Connect Claude Code</button></div>
+    </div>
+  </section>
+
+  <!-- ================= HEALTH ================= -->
+  <section class="module" id="m-health" hidden>
+    <div class="head"><div><h1>Health</h1><p class="lede">Checks the service, your access, file permissions and what protects your secrets on this machine.</p></div></div>
+    <div class="box">
+      <form class="decide flat" id="doctor-form">
+        <input class="input" id="doctor-pass" type="password" autocomplete="off" placeholder="Passphrase, optional: adds the sandbox and hardening report" aria-label="Passphrase">
+        <button class="btn primary">Run check</button>
+        <p class="msg" id="doctor-summary"></p>
+      </form>
+      <ul class="checks sep" id="doctor-checks" hidden></ul>
+    </div>
+  </section>
+
+  <!-- ================= SECURITY ================= -->
+  <section class="module" id="m-security" hidden>
+    <div class="head"><div><h1>Security</h1><p class="lede">How you prove it's you, and how long the vault stays open.</p></div></div>
+    <div class="box" id="hello-box" hidden>
+      <div class="row">
+        <div><h2>Approve with Windows Hello</h2><p>While the vault is unlocked, confirm requests with your face, fingerprint or PIN instead of the passphrase. Unlocking, changing secrets and changing these settings still need the passphrase.</p></div>
+        <button class="switch" id="hello" role="switch" aria-checked="false" aria-label="Approve with Windows Hello"></button>
+      </div>
+      <p class="msg row-msg" id="hello-msg"></p>
+    </div>
+    <div class="connect-slot"></div>
+    <div class="box" id="timers" hidden>
+      <div class="row"><div><h2>Lock the vault after</h2><p>When nothing has used it for this long. Unlocking needs the passphrase again.</p></div><select class="input" id="t-idle" data-key="session_idle_secs" aria-label="Lock the vault after"></select></div>
+      <div class="row"><div><h2>Approvals for a while last at most</h2><p>The longest "approve for a while" you can give. A secret's own rules can only shorten it.</p></div><select class="input" id="t-grant" data-key="grant_ttl_secs" aria-label="Approvals for a while last at most"></select></div>
+      <div class="row"><div><h2>Requests wait for you</h2><p>After this, a request nobody answered is denied.</p></div><select class="input" id="t-wait" data-key="approval_timeout_secs" aria-label="Requests wait for you"></select></div>
+      <p class="msg row-msg" id="timers-msg"></p>
+    </div>
+    <p class="fineprint" id="policy-path"></p>
+  </section>
+</main>
+
+<!-- Passphrase prompt for changes (the passphrase is never kept). -->
+<dialog id="ask">
+  <form method="dialog" id="ask-form">
+    <h2 id="ask-title">Confirm with your passphrase</h2>
+    <p class="help" id="ask-text"></p>
+    <input class="input" id="ask-pass" type="password" autocomplete="off" aria-label="Passphrase">
+    <p class="msg" id="ask-msg"></p>
+    <div class="dialog-acts"><button class="btn" type="button" id="ask-cancel">Cancel</button><button class="btn primary" id="ask-ok">Confirm</button></div>
+  </form>
+</dialog>
+
+<template id="connect-tpl">
+  <form class="box connect">
+    <div class="sec">
+      <h2>Show live requests and activity</h2>
+      <p class="help">Confirm it's you once. The app keeps the connection open and never stores your passphrase.</p>
+      <div class="connect-row">
+        <input class="input" type="password" autocomplete="off" placeholder="Passphrase" aria-label="Passphrase">
+        <button class="btn primary" value="pass">Connect</button>
+        <button class="btn hello-btn" type="button" hidden>Use Windows Hello</button>
+      </div>
+      <p class="msg"></p>
+    </div>
+  </form>
+</template>
+
+<script src="app.js"></script>
 </body>
 </html>

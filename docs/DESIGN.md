@@ -702,19 +702,12 @@ and `freezePrototype` is on. Every string from an agent or the daemon is set wit
 secret values go from the page to Rust as strings and are wrapped in `SecretText`
 immediately; no command returns one. Input fields are cleared as they are read.
 
-**Tabs.** Approvals (start watching with the passphrase; each request shows the same
-fields as `credstore watch`, including what is not enforced; approve once, approve for
-the policy's maximum, or deny, each with the passphrase), Secrets (list, add or replace,
-remove; values are write-only), Folders (pick a folder, see the exact grant commands,
-run them), Claude Code (registered at user scope, deny rules; one button runs the same
-steps as `credstore setup`), Health (`doctor`, optionally with the passphrase).
+**Pages.** Approvals, Activity, Secrets, Folders, Claude Code, Health and Security; see
+"App redesign" below for what each does since 2026-11-07.
 
 **Tray.** Closing the window hides it; the tray icon reopens or quits. A new pending
-request raises an OS notification. On a desktop without a tray the window just closes.
-
-**Not built: the audit viewer** (planned in the roadmap). In installed mode the audit log
-is readable only by the service account and admins (spec 8), and adding an endpoint to
-read it would widen what a member of `credstore-approvers` can see. Left for later.
+request raises an OS notification and brings the window forward. On a desktop without a
+tray the window just closes.
 
 **Packages.** When the app was built, `build-msi.ps1` adds `credstore-app.exe` and a
 "credstore" Start menu shortcut to the MSI, `build-pkg.sh` adds a minimal
@@ -727,8 +720,83 @@ called the backend (with a 90 s watchdog), printing what the page saw. CI's `pac
 job runs it from each installed package: on Linux under `xvfb-run` and on macOS it must
 report the installed service as reachable; on Windows the runner account is not an
 allowed user, so the check is that the page loads. The layout was checked in a browser
-with a stubbed backend. Not tested: clicking through the tabs in the real app, and
+with a stubbed backend. Not tested: clicking through the pages in the real app, and
 notifications and the tray on a real desktop.
+
+## App redesign (2026-11-07)
+
+The owner asked for the features the app lacked (allowed hosts, a Windows Hello switch,
+refused requests with a fix, an activity history, security settings), for the window and
+the Hello dialog to come to the front, for an app icon, and for a redesign. The visual
+system is recorded in [VISUAL.md](VISUAL.md); `PRODUCT.md` holds the product brief.
+
+**One live feed.** `ApproverOp::SubscribeFeed` streams a `Feed` (pending requests,
+activity, the policy as it applies to each secret, whether the vault is locked) now and
+after every audit record or pending change; bursts are sent once (50 ms). Like
+`SubscribePending`, the proof is checked once, when the stream opens: the passphrase, or
+an approval-key signature (Hello) while the vault is unlocked. The app opens it once
+("Connect", or "Use Windows Hello") and keeps it open; it stores nothing. The CLI's
+`SubscribePending` is unchanged.
+
+**Activity (the audit viewer).** M10 left it out because reading the audit log over the
+approver endpoint would widen what any member of `credstore-approvers` can see. The feed
+answers that: only a connection that proved the passphrase (or an enrolled Hello key)
+gets it. The daemon reads the last 1 MiB of `audit.jsonl` and groups records by request
+id (`credstore_core::activity`): request, then `policy_denied` / `approved` / `denied`,
+then `run_finished` / `http_finished`; plus vault and policy changes and failed proofs.
+The newest 100 entries are sent. Audit records hold no values, so entries hold none.
+The audit chain is not verified here (`credstore audit verify` does that).
+
+**Refused requests and "Allow this host".** A request refused by policy never reaches the
+human, so the agent used to be the only one who knew. The Approvals page now lists
+refusals from the last hour with the reason in plain words, and for an HTTPS request,
+a button that adds the host to that secret's `allow_hosts` (with the passphrase).
+
+**Policy edits from the app.** `SetSecretRules {name, allow_hosts, allow_commands}` and
+`SetDefaults {session_idle_secs, grant_ttl_secs, approval_timeout_secs}` change
+`policy.toml` and reload it. Passphrase only: `key_allowed()` excludes them, so a Hello
+key can watch and decide but not widen policy. The edit goes through `toml_edit`
+(`credstore_core::policy_edit`), which keeps the file's comments and layout, then the
+result is parsed with the full policy validator before it is written (atomically, with
+the directory's ACL), so a bad edit changes nothing. Hosts set `network = "allow-list"`;
+an empty list removes the rule (and `network` if it was `allow-list`), and an empty
+block is removed, so the secret follows `[defaults]` again. Audited as
+`policy_changed`.
+
+On Linux and macOS installs the policy is root's (`/etc/credstore/policy.toml`, spec
+5.4) and the service cannot write it; `PolicyInfo.editable` is false there and the app
+says to edit the file with sudo. The installers were not changed to hand the file to
+the service: that is a change to who may set policy, for the owner to decide.
+
+**Windows Hello switch.** Security has a switch that enrols (`hello::create`, then
+`AddApprovalKey`, after checking the passphrase) or removes the key, the same steps as
+`credstore hello enrol` / `remove`.
+
+**Window and dialog in front.** On a new request the app shows and unminimizes the
+window, sets it topmost for a moment and back, asks for focus, and flashes the taskbar
+button: Windows does not let a background app take the keyboard, but the window becomes
+visible. Hello's dialog belongs to a system broker process and often opened behind the
+app; `credstore-os` (`sys/windows/foreground.rs`, a small commented `unsafe` module)
+now calls `AllowSetForegroundWindow(ASFW_ANY)` and, while a Hello request is open,
+brings the window of class `Credential Dialog Xaml Host` forward. Not tested on CI (no
+desktop): checked by hand only.
+
+**Icon.** `app/icons/make_icons.py` draws the mark (VISUAL.md) at 16 to 256 px into the
+PNGs and a multi-size ICO; Tauri uses them for the window, taskbar and tray, and the MSI
+now sets `ARPPRODUCTICON` and the Start menu shortcuts' icon.
+
+**Fonts.** Geist and Geist Mono (SIL OFL 1.1, `app/ui/fonts/OFL.txt`) are bundled as
+variable woff2 files, because the app's CSP allows only its own files.
+
+**Tested.** `tests/app_feed.rs` drives the feed and the edits against a dev daemon: a
+wrong passphrase gets no feed; activity shows a saved secret; an HTTPS request refused
+for having no hosts shows up as refused, with its host; "allow" with a wrong passphrase
+fails, with the right one the host lands in the file with the file's comments kept and
+the feed shows it; an invalid timer changes nothing; no feed holds the fake value.
+`m13_approval_keys.rs` checks a key opens the feed and cannot change policy.
+`policy_edit` and `activity` have unit tests. The page was checked in a browser with a
+stubbed backend (each page, the connect step, approve by keyboard, allow a host, edit
+and save rules, change a timer, the narrow layout).
 
 ## `http_request`: the auth proxy (M11)
 
@@ -899,6 +967,12 @@ real terminal is not, since CI has none.
   notification plugins (M10).
 - `windows` 0.62 (WinRT `KeyCredentialManager`): Windows Hello approval keys (M13); see
   that section.
+- `toml_edit` 0.25: policy edits from the app that keep the file's comments. It is
+  from the same project as `toml` and shares its parser crates (`toml_parser`,
+  `toml_datetime`, `toml_writer`); `indexmap` and `winnow` were already in the tree.
+- `windows-sys` feature `Win32_UI_WindowsAndMessaging`: bringing the Hello dialog
+  forward.
+- Fonts in the app: Geist and Geist Mono (OFL), bundled files, not a dependency.
 
 ## Dependency advisories
 

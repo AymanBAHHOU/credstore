@@ -1,6 +1,7 @@
 //! Windows.
 
 pub mod appcontainer;
+pub mod foreground;
 pub mod hello;
 pub mod ipc;
 pub mod job;

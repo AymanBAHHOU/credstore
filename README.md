@@ -49,9 +49,11 @@ thing.
 **Desktop app.** The Windows and macOS packages also install the credstore app (Start
 menu "credstore", or `/Applications/credstore.app`); on Linux install
 `credstore-app_VERSION_amd64.deb` (or the `.rpm`) too. It does the same as the commands
-below without a terminal: approve requests (with a notification when one arrives), add
-and remove secrets, grant folders, connect Claude Code and run the health check.
-Closing the window keeps it in the tray. Every approval still needs the passphrase.
+below without a terminal: approve requests (the window comes forward when one arrives),
+see the activity history and requests the policy refused, add and remove secrets and
+choose the hosts and commands each one may be used with, grant folders, connect Claude
+Code, run the health check, and turn Windows Hello approval on or off. Closing the
+window keeps it in the tray. Every approval needs the passphrase, or Windows Hello.
 
 On Windows the installer ends on a page that offers to open the app; no sign-out is
 needed (the installer lets your account in directly, not only through the groups).
@@ -155,8 +157,8 @@ credstore hello enrol     # asks for the passphrase, then Windows Hello
 After that, `credstore watch` and the desktop app confirm each approval with Windows
 Hello (face, fingerprint or PIN) while the vault is unlocked. Unlocking, changing
 secrets and `credstore run` still take the passphrase, and the passphrase always works
-when Hello is cancelled. `credstore hello remove` undoes it. Touch ID on macOS is not
-supported yet.
+when Hello is cancelled. `credstore hello remove` undoes it; the app's Security page has
+the same switch. Touch ID on macOS is not supported yet.
 
 ## Use with Claude Code
 
@@ -204,7 +206,10 @@ passphrase you type is the approval, and policy still applies.
 ## Policy
 
 [deploy/policy.toml](deploy/policy.toml) is the starter policy. Any secret without its
-own block uses `[defaults]`, which allows any command but always asks you. A stricter
+own block uses `[defaults]`, which allows any command but always asks you. The desktop
+app edits a secret's hosts and commands and the vault and approval timers for you (with
+the passphrase, keeping the file's comments); on Linux and macOS installs the file
+belongs to root, so edit it with sudo there. A stricter
 example:
 
 ```toml

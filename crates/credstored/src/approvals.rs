@@ -197,6 +197,7 @@ impl State {
 
     fn notify(&self) {
         self.pending_version.send_modify(|v| *v = v.wrapping_add(1));
+        self.feed_version.send_modify(|v| *v = v.wrapping_add(1));
     }
 
     pub fn pending_list(&self) -> Vec<PendingRequest> {
