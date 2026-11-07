@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>credstore mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  /* The three owner colors */
+  --obsidian: #0E0F12;   /* Obsidian black: the ground */
+  --ice: #DCE3EA;        /* Ice gray: text and the primary button */
+  --red: #D40000;        /* Racing red: what needs you */
+
+  /* Derived from them */
+  --text-2: #A3ADB8;                    /* secondary text */
+  --text-3: #76808B;                    /* labels */
+  --line: rgba(220, 227, 234, .12);     /* hairlines */
+  --line-2: rgba(220, 227, 234, .22);
+  --fill: rgba(220, 227, 234, .04);     /* surfaces */
+  --fill-2: rgba(220, 227, 234, .07);
+  --red-text: #FF6A5E;                  /* red as small text (AA on obsidian) */
+
+  --sans: "Geist", "Segoe UI", system-ui, sans-serif;
+  --mono: "Geist Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--obsidian); color: var(--ice);
+  font: 15px/1.55 var(--sans); -webkit-font-smoothing: antialiased; caret-color: var(--red-text);
+}
+::selection { background: var(--red); color: #fff; }
+::-webkit-scrollbar { width: 10px; }
+::-webkit-scrollbar-thumb { background: var(--fill-2); border-radius: 10px; border: 2px solid var(--obsidian); }
+:focus-visible { outline: 2px solid var(--ice); outline-offset: 2px; }
+code, .mono { font-family: var(--mono); font-size: .92em; }
+p { margin: 0; }
+
+.label { font: 500 11.5px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); flex: none; display: inline-block; }
+.dot.on { background: var(--ice); }
+.dot.red { background: var(--red); }
+.dot.ring { background: transparent; box-shadow: inset 0 0 0 1.5px var(--red-text); }
+
+/* ---------- Top bar ---------- */
+.top {
+  position: sticky; top: 0; z-index: 3;
+  display: flex; align-items: center; gap: 28px;
+  height: 64px; padding: 0 28px;
+  background: rgba(14, 15, 18, .92); backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+.brand { display: flex; align-items: center; gap: 10px; font: 600 18px/1 var(--sans); letter-spacing: -.02em; }
+.brand svg { width: 26px; height: 26px; }
+.nav { display: flex; gap: 2px; }
+.nav button {
+  position: relative; display: flex; align-items: center; gap: 8px;
+  height: 36px; padding: 0 12px; border: 0; border-radius: 999px; background: none;
+  color: var(--text-2); font: 500 14px/1 var(--sans); cursor: pointer;
+}
+.nav button:hover { color: var(--ice); background: var(--fill); }
+.nav button[aria-current="page"] { color: var(--ice); background: var(--fill-2); }
+.badge { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--red); color: #fff; font: 600 12px/20px var(--mono); text-align: center; }
+.status { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.pill {
+  display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 13px;
+  border: 1px solid var(--line); border-radius: 999px; color: var(--text-2);
+  font: 500 13px/1 var(--sans); background: none; white-space: nowrap;
+}
+button.pill { cursor: pointer; }
+button.pill:hover { color: var(--ice); border-color: var(--line-2); }
+
+/* ---------- Page ---------- */
+main { max-width: 1040px; margin: 0 auto; padding: 44px 28px 80px; }
+.head { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 28px; }
+h1 { font: 500 38px/1.05 var(--sans); letter-spacing: -.035em; margin: 0 0 10px; }
+.lede { color: var(--text-2); font-size: 16px; max-width: 60ch; }
+.head .actions { margin-left: auto; }
+h2 { font: 500 19px/1.3 var(--sans); letter-spacing: -.015em; margin: 0; }
+
+.box { border: 1px solid var(--line); border-radius: 14px; background: var(--fill); }
+.box + .box { margin-top: 16px; }
+.pad { padding: 24px; }
+.sep { border-top: 1px solid var(--line); }
+
+/* Buttons: pills */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+  height: 42px; padding: 0 20px; border-radius: 999px;
+  border: 1px solid var(--line-2); background: none; color: var(--ice);
+  font: 500 14.5px/1 var(--sans); cursor: pointer; white-space: nowrap;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.btn:hover { background: var(--fill-2); border-color: rgba(220,227,234,.35); }
+.btn.primary { background: var(--ice); border-color: var(--ice); color: var(--obsidian); }
+.btn.primary:hover { background: #fff; border-color: #fff; }
+.btn.danger { color: var(--red-text); border-color: rgba(255,106,94,.4); }
+.btn.danger:hover { background: rgba(212,0,0,.1); border-color: var(--red-text); }
+.btn.sm { height: 34px; padding: 0 15px; font-size: 13.5px; }
+.btn[disabled] { opacity: .45; cursor: default; }
+.btn.busy { pointer-events: none; opacity: .6; }
+kbd { font: 500 11px/1 var(--mono); padding: 3px 5px; border-radius: 4px; border: 1px solid currentColor; opacity: .5; }
+
+.input {
+  height: 42px; width: 100%; padding: 0 18px; border-radius: 999px;
+  border: 1px solid var(--line); background: rgba(0,0,0,.25); color: var(--ice);
+  font: 400 14.5px/1 var(--sans);
+}
+.input::placeholder { color: #6F7984; }
+.input:hover { border-color: var(--line-2); }
+.input:focus { outline: none; border-color: var(--text-2); }
+.input.mono { font-family: var(--mono); font-size: 13.5px; }
+
+/* ---------- Request ---------- */
+.request { overflow: hidden; border-color: rgba(212,0,0,.55); }
+.req-band { display: flex; align-items: center; gap: 14px; padding: 14px 24px; background: var(--red); color: #fff; }
+.req-band b { font: 600 15px/1 var(--sans); letter-spacing: -.01em; }
+.req-band .meta { margin-left: auto; display: flex; gap: 18px; font: 500 12.5px/1 var(--mono); color: rgba(255,255,255,.88); }
+.kv { display: grid; grid-template-columns: 132px 1fr; margin: 0; }
+.kv > dt, .kv > dd { margin: 0; padding: 15px 24px; border-top: 1px solid var(--line); }
+.kv > dt:first-of-type, .kv > dt:first-of-type + dd { border-top: 0; }
+.kv > dt { padding-top: 18px; }
+.kv > dd { color: var(--text-2); word-break: break-word; }
+.kv .code { font: 400 14px/1.6 var(--mono); }
+.kv .em { color: var(--ice); }
+.kv .note { display: block; margin-top: 4px; font-size: 13.5px; color: var(--text-3); }
+.reason { color: var(--ice); font-size: 16px; }
+.slot { padding: 1px 7px; border-radius: 5px; border: 1px dashed var(--line-2); color: var(--text-2); }
+.ok-line { color: var(--ice); display: inline-flex; align-items: center; gap: 8px; }
+.ok-line svg { width: 15px; height: 15px; }
+.decide { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 18px 24px; border-top: 1px solid var(--line); background: rgba(0,0,0,.2); }
+.decide .input { flex: 1 1 280px; }
+.decide .msg { flex-basis: 100%; min-height: 20px; color: var(--text-2); font-size: 13.5px; display: flex; gap: 8px; align-items: center; }
+.decide .msg:empty { display: none; }
+
+.notice { display: grid; grid-template-columns: auto 1fr auto; gap: 18px; align-items: center; padding: 18px 24px; }
+.notice p { color: var(--text-2); }
+.notice strong { color: var(--ice); font-weight: 500; }
+.notice .acts { display: flex; gap: 8px; }
+.idle { display: flex; align-items: center; gap: 12px; padding: 22px 24px; color: var(--text-2); }
+
+/* Outcome tags */
+.tag { display: inline-block; padding: 4px 10px; border-radius: 999px; font: 500 12px/1.2 var(--mono); border: 1px solid var(--line-2); color: var(--text-2); white-space: nowrap; }
+.tag.ok { color: var(--ice); background: var(--fill-2); border-color: transparent; }
+.tag.no { color: #fff; background: var(--red); border-color: var(--red); }
+.tag.ref { color: var(--red-text); border-color: rgba(255,106,94,.45); }
+
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; padding: 16px 20px 12px; }
+td { padding: 15px 20px; border-top: 1px solid var(--line); vertical-align: top; color: var(--text-2); font-size: 14.5px; }
+td.t { font: 400 13px/1.7 var(--mono); color: var(--text-3); white-space: nowrap; }
+td .mono { color: var(--ice); }
+
+.segs { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.seg { height: 34px; padding: 0 15px; border-radius: 999px; border: 1px solid var(--line); background: none; color: var(--text-2); font: 500 13.5px/1 var(--sans); cursor: pointer; }
+.seg:hover { color: var(--ice); border-color: var(--line-2); }
+.seg[aria-pressed="true"] { background: var(--ice); color: var(--obsidian); border-color: var(--ice); }
+
+/* Secrets */
+.split { display: grid; grid-template-columns: 290px 1fr; gap: 16px; align-items: start; }
+.slist { padding: 8px; }
+.srow { display: block; width: 100%; padding: 14px 16px; border-radius: 10px; border: 0; background: none; text-align: left; color: inherit; cursor: pointer; }
+.srow:hover { background: var(--fill); }
+.srow[aria-current="true"] { background: var(--fill-2); }
+.srow .n { font: 500 14px/1.3 var(--mono); }
+.srow .d { font-size: 13.5px; color: var(--text-3); margin-top: 3px; }
+.srow .h { display: flex; align-items: center; gap: 8px; margin-top: 9px; font: 400 12.5px/1 var(--mono); color: var(--text-2); }
+.sec { padding: 24px; }
+.sec + .sec { border-top: 1px solid var(--line); }
+.help { color: var(--text-3); font-size: 14px; margin-top: 6px; max-width: 62ch; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.field-l { display: block; margin-bottom: 9px; }
+.value { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 6px 6px 6px 18px; border: 1px solid var(--line); border-radius: 999px; }
+.value span { font: 400 13.5px/1 var(--mono); color: var(--text-2); }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 12px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 6px 0 14px; border-radius: 999px; background: var(--fill-2); font: 400 13.5px/1 var(--mono); }
+.chip button { width: 24px; height: 24px; border: 0; border-radius: 50%; background: none; color: var(--text-3); cursor: pointer; display: grid; place-items: center; }
+.chip button:hover { background: var(--fill-2); color: var(--ice); }
+.chip.muted { color: var(--text-3); padding-right: 14px; background: none; border: 1px dashed var(--line-2); }
+.addhost { display: flex; gap: 8px; max-width: 540px; }
+.savebar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 16px 24px; border-top: 1px solid var(--line); background: rgba(0,0,0,.2); border-radius: 0 0 14px 14px; }
+.savebar .grow { flex: 1; display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: 14px; white-space: nowrap; }
+.savebar .input { max-width: 240px; }
+.danger-zone { margin: 16px 0 0 306px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 24px; border: 1px solid rgba(255,106,94,.25); border-radius: 14px; color: var(--text-2); font-size: 14px; }
+
+/* Checks */
+.checks { list-style: none; margin: 0; padding: 0; }
+.checks li { display: grid; grid-template-columns: 14px 130px 1fr; gap: 14px; align-items: baseline; padding: 15px 24px; border-top: 1px solid var(--line); color: var(--text-2); font-size: 14.5px; }
+.checks li:first-child { border-top: 0; }
+.checks .k { font: 500 13px/1.4 var(--mono); color: var(--ice); }
+.checks .st { font: 500 11px/1 var(--mono); color: var(--text-3); margin-right: 10px; letter-spacing: .06em; }
+
+/* Settings rows + switch */
+.row { display: grid; grid-template-columns: 1fr auto; gap: 24px; align-items: center; padding: 22px 24px; }
+.row + .row { border-top: 1px solid var(--line); }
+.row p { color: var(--text-3); font-size: 14px; margin-top: 4px; max-width: 62ch; }
+.switch { width: 48px; height: 28px; border-radius: 999px; border: 0; padding: 0; position: relative; background: var(--fill-2); cursor: pointer; box-shadow: inset 0 0 0 1px var(--line-2); transition: background .2s; }
+.switch::after { content: ""; position: absolute; top: 4px; left: 4px; width: 20px; height: 20px; border-radius: 50%; background: var(--text-2); transition: transform .2s cubic-bezier(.16,1,.3,1), background .2s; }
+.switch[aria-checked="true"] { background: var(--ice); box-shadow: none; }
+.switch[aria-checked="true"]::after { transform: translateX(20px); background: var(--obsidian); }
+@media (prefers-reduced-motion: reduce) { .switch::after { transition: none; } }
+select.input { width: auto; padding-right: 40px; appearance: none; cursor: pointer; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='none' stroke='%23A3ADB8' stroke-width='1.6'%3E%3Cpath d='M1 1.5l5 5 5-5'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 16px center; }
+select.input option { background: var(--obsidian); }
+.keyline { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 0 24px 22px; padding: 6px 6px 6px 18px; border: 1px solid var(--line); border-radius: 999px; }
+.keyline span { font: 400 13px/1 var(--mono); color: var(--text-2); }
+
+pre.cmd { margin: 16px 0 0; padding: 16px 18px; border-radius: 10px; background: rgba(0,0,0,.3); border: 1px solid var(--line); font: 400 13px/1.7 var(--mono); color: var(--text-2); white-space: pre-wrap; }
+
+/* Icon sheet (mockup only) */
+.sheet { display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; }
+.sheet .box + .box { margin-top: 0; }
+.sizes { display: flex; align-items: flex-end; gap: 32px; padding: 32px 28px; }
+.sizes figure { margin: 0; text-align: center; }
+.sizes figcaption { margin-top: 12px; }
+.tbar { display: flex; gap: 6px; padding: 8px 14px; border-radius: 10px; }
+.tbar.d { background: #1F1F1F; } .tbar.l { background: #EEF0F3; }
+.tb { width: 40px; height: 40px; border-radius: 6px; display: grid; place-items: center; position: relative; }
+.tb i { width: 22px; height: 22px; border-radius: 5px; background: #7B8590; opacity: .35; }
+.tb.on::after { content: ""; position: absolute; bottom: 1px; width: 16px; height: 3px; border-radius: 2px; background: #6CA8FF; }
+.tbar.d .tb.on { background: rgba(255,255,255,.07); } .tbar.l .tb.on { background: rgba(0,0,0,.05); }
+.swatches { display: grid; grid-template-columns: repeat(3, 1fr); overflow: hidden; }
+.sw + .sw { border-left: 1px solid var(--line); }
+.sw .c { height: 110px; border-bottom: 1px solid var(--line); }
+.sw .t { padding: 16px 20px; }
+.sw .t b { display: block; font-weight: 500; }
+.sw .t span { font: 400 13px/1.7 var(--mono); color: var(--text-2); }
+
+.mock { max-width: 1040px; margin: -40px auto 40px; padding: 18px 28px 0; display: flex; gap: 6px; align-items: center; border-top: 1px dashed var(--line); }
+
+@media (max-width: 1100px) {
+  .top { gap: 16px; }
+  .status .pill:not(#lock) { display: none; }
+}
+@media (max-width: 900px) {
+  .top { padding: 0 16px; overflow-x: auto; }
+  .brand span { display: none; }
+  main { padding: 28px 16px 90px; }
+  h1 { font-size: 30px; }
+  .split, .grid2, .sheet { grid-template-columns: 1fr; }
+  .kv { grid-template-columns: 1fr; }
+  .kv > dd { border-top: 0; padding-top: 0; }
+  .notice { grid-template-columns: auto 1fr; }
+  .notice .acts { grid-column: 1 / -1; }
+  .danger-zone { margin-left: 0; flex-wrap: wrap; }
+  .checks li { grid-template-columns: 14px 1fr; }
+  .checks li > span:last-child { grid-column: 2; }
+  .req-band .meta span:not(:last-child) { display: none; }
+  .row { grid-template-columns: 1fr; }
+  .mock { display: none; }
+}
+</style>
+</head>
+<body>
+<!--
+THESIS: credstore as a calm, confident infrastructure console in the manner of cloudflare.com:
+  flat obsidian, one clean sans, hairlines, pills. Red appears only as solid blocks for what needs you.
+OWN-WORLD: obsidian #0E0F12 ground, ice gray #DCE3EA text and primary pills, 12% ice hairlines,
+  4-7% ice fills, Geist + Geist Mono labels; racing red #D40000 as a full band on a waiting request,
+  counts and denials. No shadows, gradients or glows.
+STORY: the developer sees the red band, reads exactly what goes where with which secret, and
+  approves or denies with equal ease; refusals explain themselves and offer the fix.
+FIRST VIEWPORT: top bar (brand, sections as pills, status pills); large heading; the request
+  with its red band, the readout, decision pills; the refused notice below.
+FORM: user steer to the category standard with cloudflare.com as the craft bar (seed 2fcefde2 superseded).
+FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
+-->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="mark" viewBox="0 0 64 64">
+      <rect x="1" y="1" width="62" height="62" rx="15" fill="#0E0F12" stroke="#3A4048" stroke-width="2"/>
+      <rect x="13" y="27" width="38" height="10" rx="5" fill="#DCE3EA"/>
+      <circle cx="47" cy="16" r="5" fill="#D40000"/>
+    </symbol>
+    <symbol id="i-check" viewBox="0 0 16 16"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-x" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 16 16"><path d="M2 4.5a1 1 0 0 1 1-1h3l1.5 1.5H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></symbol>
+  </defs>
+</svg>
+
+<header class="top">
+  <div class="brand"><svg aria-hidden="true"><use href="#mark"/></svg><span>credstore</span></div>
+  <nav class="nav" aria-label="Sections">
+    <button data-mod="approvals" aria-current="page">Approvals <span class="badge" id="badge">1</span></button>
+    <button data-mod="activity">Activity</button>
+    <button data-mod="secrets">Secrets</button>
+    <button data-mod="folders">Folders</button>
+    <button data-mod="claude">Claude Code</button>
+    <button data-mod="health">Health</button>
+    <button data-mod="security">Security</button>
+  </nav>
+  <div class="status">
+    <span class="pill" title="The credstore service is running"><span class="dot on"></span>Service running</span>
+    <span class="pill" title="Locks after 10 minutes unused"><span class="dot on"></span><span id="vault-state">Vault open · 9:42</span></span>
+    <button class="pill" id="lock"><svg width="14" height="14"><use href="#i-lock"/></svg>Lock</button>
+  </div>
+</header>
+
+<main>
+  <!-- ================= APPROVALS ================= -->
+  <section class="module" id="m-approvals">
+    <div class="head"><div><h1>Approvals</h1><p class="lede">An agent wants to use one of your secrets. Read what will be sent and where, then decide. Nothing runs until you do.</p></div></div>
+
+    <article class="box request" id="req">
+      <div class="req-band">
+        <b>Waiting for you</b>
+        <div class="meta"><span>http_request</span><span>12 s ago</span><span>expires in 1:48</span></div>
+      </div>
+      <dl class="kv">
+        <dt class="label">Reason</dt>
+        <dd><span class="reason">“Fetch daily crude prices around Oct 31 to fill gaps from the earlier week query.”</span><span class="note">Written by the agent. It explains the request; it does not authorize it.</span></dd>
+        <dt class="label">Request</dt>
+        <dd class="code"><span class="em">GET</span> https://<span class="em">api.oilpriceapi.com</span>/v1/prices/past_month?by_code=WTI_USD,BRENT_CRUDE_USD,DUBAI_CRUDE_USD,URALS_CRUDE_USD&amp;interval=1d&amp;start_date=2026-10-29&amp;end_date=2026-11-01</dd>
+        <dt class="label">Secret</dt>
+        <dd><span class="code em">OILPRICEAPI_KEY</span><span class="note">The API key for oilpriceapi.com. credstore sends it; the agent never sees it.</span></dd>
+        <dt class="label">Header</dt>
+        <dd class="code">Authorization: Token <span class="slot">value</span></dd>
+        <dt class="label">Host</dt>
+        <dd><span class="ok-line"><svg><use href="#i-check"/></svg>api.oilpriceapi.com is on this secret's allow-list</span></dd>
+        <dt class="label">Asked by</dt>
+        <dd>Claude Code <span class="code">· pid 25464 · you</span></dd>
+      </dl>
+      <div class="decide">
+        <input class="input" id="pass" type="password" autocomplete="off" placeholder="Passphrase, or leave empty for Windows Hello" aria-label="Passphrase">
+        <button class="btn" id="deny">Deny <kbd>D</kbd></button>
+        <button class="btn" id="session">Approve for 10 min</button>
+        <button class="btn primary" id="once">Approve once <kbd>A</kbd></button>
+        <p class="msg" id="msg"></p>
+      </div>
+    </article>
+
+    <div class="box idle" id="idle" hidden><span class="dot on"></span>No requests waiting. credstore keeps running in the tray and notifies you when an agent asks.</div>
+
+    <article class="box notice">
+      <span class="dot ring"></span>
+      <p><strong>Refused by policy at 5:26 PM.</strong> A request to send <span class="mono">OILPRICEAPI_KEY</span> to <span class="mono">api.oilpriceapi.com</span> was blocked before reaching you, because this secret has no allowed hosts.</p>
+      <div class="acts"><button class="btn sm">Dismiss</button><button class="btn sm primary" data-goto="secrets">Allow this host</button></div>
+    </article>
+  </section>
+
+  <!-- ================= ACTIVITY ================= -->
+  <section class="module" id="m-activity" hidden>
+    <div class="head"><div><h1>Activity</h1><p class="lede">Every request an agent made, what you decided, and what ran. Values never appear here.</p></div></div>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+      <div class="segs" role="group" aria-label="Filter">
+        <button class="seg" aria-pressed="true">All</button><button class="seg" aria-pressed="false">Approved</button><button class="seg" aria-pressed="false">Denied</button><button class="seg" aria-pressed="false">Refused</button>
+      </div>
+      <span class="pill" style="margin-left:auto"><span class="dot on"></span>Log verified, nothing altered</span>
+    </div>
+    <div class="box">
+      <table>
+        <thead><tr><th class="label">Time</th><th class="label">Outcome</th><th class="label">Request</th><th class="label">Secret</th></tr></thead>
+        <tbody>
+          <tr><td class="t">17:41:08</td><td><span class="tag ok">approved once</span></td><td><span class="mono">GET api.oilpriceapi.com</span><br>/v1/prices/past_month · 200 · 3.1 KB</td><td class="mono">OILPRICEAPI_KEY</td></tr>
+          <tr><td class="t">17:33:52</td><td><span class="tag ok">approved 10 min</span></td><td><span class="mono">GET api.oilpriceapi.com</span><br>/v1/prices/latest · 200 · Windows Hello</td><td class="mono">OILPRICEAPI_KEY</td></tr>
+          <tr><td class="t">17:30:15</td><td><span class="tag no">denied</span></td><td><span class="mono">curl -H "Authorization: Token $OILPRICEAPI_KEY" …</span><br>C:/Users/you/projects/oil-dash</td><td class="mono">OILPRICEAPI_KEY</td></tr>
+          <tr><td class="t">17:26:40</td><td><span class="tag ref">refused</span></td><td><span class="mono">GET api.oilpriceapi.com</span><br>no allowed hosts for this secret</td><td class="mono">OILPRICEAPI_KEY</td></tr>
+          <tr><td class="t">17:12:03</td><td><span class="tag">secret added</span></td><td>from the app</td><td class="mono">OILPRICEAPI_KEY</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="label" style="margin-top:14px">Example data</p>
+  </section>
+
+  <!-- ================= SECRETS ================= -->
+  <section class="module" id="m-secrets" hidden>
+    <div class="head"><div><h1>Secrets</h1><p class="lede">Agents see only names and descriptions. Values go in once and never come back out.</p></div><div class="actions"><button class="btn"><svg width="14" height="14"><use href="#i-plus"/></svg>Add secret</button></div></div>
+    <div class="split">
+      <div class="box slist">
+        <button class="srow" aria-current="true"><div class="n">OILPRICEAPI_KEY</div><div class="d">The API key for oilpriceapi.com</div><div class="h"><span class="dot on"></span>1 allowed host</div></button>
+        <button class="srow"><div class="n">GITHUB_TOKEN</div><div class="d">Fine-grained token, repo read</div><div class="h"><span class="dot ring"></span>no allowed hosts</div></button>
+      </div>
+      <div class="box">
+        <div class="sec">
+          <div class="grid2">
+            <div><label class="label field-l" for="sn">Name</label><input class="input mono" id="sn" value="OILPRICEAPI_KEY" readonly></div>
+            <div><label class="label field-l" for="sd">Description · agents see this</label><input class="input" id="sd" value="The API key for oilpriceapi.com"></div>
+          </div>
+          <div style="margin-top:18px"><span class="label field-l">Value</span><div class="value"><span>stored Nov 7 · never shown</span><button class="btn sm">Replace value</button></div></div>
+        </div>
+        <div class="sec">
+          <h2>Where it may be sent</h2>
+          <p class="help">credstore sends this secret only to these hosts when an agent asks for an HTTPS request. Commands that use it are not limited by this list.</p>
+          <div class="segs" role="group" aria-label="Network" style="margin-top:18px"><button class="seg" aria-pressed="false">Anywhere</button><button class="seg" aria-pressed="true">Only these hosts</button><button class="seg" aria-pressed="false">Nowhere</button></div>
+          <div class="chips" id="chips"><span class="chip">api.oilpriceapi.com<button aria-label="Remove api.oilpriceapi.com"><svg width="12" height="12"><use href="#i-x"/></svg></button></span></div>
+          <form class="addhost" id="addhost"><input class="input mono" id="hostin" placeholder="api.example.com, *.example.com or host:8443" aria-label="Add a host"><button class="btn">Add</button></form>
+        </div>
+        <div class="sec">
+          <h2>Commands it may run with</h2>
+          <p class="help">Empty means any command you approve. A pattern like <code>curl *api.oilpriceapi.com*</code> refuses everything else before it reaches you.</p>
+          <div class="chips"><span class="chip muted">any command</span></div>
+        </div>
+        <div class="savebar">
+          <span class="grow"><span class="dot red"></span>1 unsaved change</span>
+          <input class="input" type="password" placeholder="Passphrase to save" aria-label="Passphrase to save">
+          <button class="btn">Discard</button><button class="btn primary">Save</button>
+        </div>
+      </div>
+    </div>
+    <div class="danger-zone"><span>Remove <span class="mono" style="color:var(--ice)">OILPRICEAPI_KEY</span> from the vault. Agents using it will start failing.</span><button class="btn sm danger">Remove secret</button></div>
+  </section>
+
+  <!-- ================= FOLDERS ================= -->
+  <section class="module" id="m-folders" hidden>
+    <div class="head"><div><h1>Folders</h1><p class="lede">Approved commands run as credstore's service account, inside a sandbox that can only work in folders you grant here. You own your project folders, so no admin rights are needed.</p></div></div>
+    <div class="box pad">
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <div class="input mono" style="display:flex;align-items:center;gap:10px;flex:1 1 320px"><svg width="16" height="16" style="color:var(--text-3)"><use href="#i-folder"/></svg>C:/Users/you/projects/oil-dash</div>
+        <button class="btn">Choose another</button>
+      </div>
+      <p style="margin-top:20px;color:var(--text-2)">credstore will run, as you:</p>
+      <pre class="cmd">icacls "C:\Users\you\projects\oil-dash" /grant "NT SERVICE\credstore:(OI)(CI)M"
+icacls "C:\Users\you\projects\oil-dash" /grant *S-1-15-2-1183488846-…:(OI)(CI)M</pre>
+      <div style="display:flex;justify-content:flex-end;margin-top:18px"><button class="btn primary">Grant access</button></div>
+    </div>
+  </section>
+
+  <!-- ================= CLAUDE CODE ================= -->
+  <section class="module" id="m-claude" hidden>
+    <div class="head"><div><h1>Claude Code</h1><p class="lede">Lets Claude Code ask credstore for secrets, and stops it from reading <code>.env</code> files or credstore's own files directly.</p></div></div>
+    <div class="box">
+      <ul class="checks">
+        <li><span class="dot on"></span><span class="k">connected</span><span>credstore is available to Claude Code in every folder</span></li>
+        <li><span class="dot on"></span><span class="k">deny rules</span><span><code>.env</code> files, <code>~/.credstore</code> and <code>C:/ProgramData/credstore</code> are blocked from reading</span></li>
+        <li><span class="dot on"></span><span class="k">tools</span><span>credstore's tools are not allowlisted, so Claude Code asks you too</span></li>
+      </ul>
+      <div class="decide"><span style="margin-right:auto;color:var(--text-3);font-size:14px">Your other Claude Code settings are kept; the old file is backed up.</span><button class="btn" disabled>Connected</button></div>
+    </div>
+  </section>
+
+  <!-- ================= HEALTH ================= -->
+  <section class="module" id="m-health" hidden>
+    <div class="head"><div><h1>Health</h1><p class="lede">Checks the service, your access, file permissions and what protects your secrets on this machine.</p></div></div>
+    <div class="box">
+      <div class="decide" style="border-top:0">
+        <input class="input" type="password" placeholder="Passphrase, optional: adds the sandbox and hardening report" aria-label="Passphrase">
+        <button class="btn primary">Run check</button>
+        <p class="msg"><span class="dot on"></span>No failures, no warnings · just now</p>
+      </div>
+      <ul class="checks sep">
+        <li><span class="dot on"></span><span class="k">service</span><span><span class="st">OK</span>installed and running</span></li>
+        <li><span class="dot"></span><span class="k">groups</span><span><span class="st">INFO</span>not active in this session yet; the service lets you in directly, so everything works</span></li>
+        <li><span class="dot on"></span><span class="k">vault</span><span><span class="st">OK</span>your account cannot read or write it</span></li>
+        <li><span class="dot on"></span><span class="k">agent</span><span><span class="st">OK</span>reachable, service identity checked, 2 secrets listed</span></li>
+        <li><span class="dot on"></span><span class="k">memory</span><span><span class="st">OK</span>your account cannot open the service's memory</span></li>
+        <li><span class="dot on"></span><span class="k">page file</span><span><span class="st">OK</span>encrypted</span></li>
+        <li><span class="dot"></span><span class="k">sandbox</span><span><span class="st">INFO</span>AppContainer inside a Job Object: only granted folders, no network unless allowed</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ================= SECURITY ================= -->
+  <section class="module" id="m-security" hidden>
+    <div class="head"><div><h1>Security</h1><p class="lede">How you prove it's you, and how long the vault stays open.</p></div></div>
+    <div class="box">
+      <div class="row">
+        <div><h2>Approve with Windows Hello</h2><p>While the vault is unlocked, confirm requests with your face, fingerprint or PIN instead of the passphrase. Unlocking, changing secrets and policy still need the passphrase.</p></div>
+        <button class="switch" id="hello" role="switch" aria-checked="true" aria-label="Approve with Windows Hello"></button>
+      </div>
+      <div class="keyline" id="keyline"><span>key 3f9a·07c2·c21e · LAPTOP-L2GSFFE2 · added Nov 7</span><button class="btn sm danger">Remove key</button></div>
+    </div>
+    <div class="box">
+      <div class="row"><div><h2>Lock the vault after</h2><p>When nothing has used it for this long. Unlocking needs the passphrase.</p></div><select class="input" aria-label="Lock after"><option>5 minutes</option><option selected>10 minutes</option><option>30 minutes</option><option>every request</option></select></div>
+      <div class="row"><div><h2>Approvals for a while last at most</h2><p>The longest "approve for a while" you can give for one secret and folder.</p></div><select class="input" aria-label="Session length"><option>5 minutes</option><option selected>10 minutes</option><option>1 hour</option></select></div>
+      <div class="row"><div><h2>Requests wait for you</h2><p>After this, a request is denied automatically.</p></div><select class="input" aria-label="Request timeout"><option selected>2 minutes</option><option>5 minutes</option></select></div>
+    </div>
+  </section>
+
+  <!-- ================= ICON + COLORS (mockup only) ================= -->
+  <section class="module" id="m-icon" hidden>
+    <div class="head"><div><h1>Icon and colors</h1><p class="lede">Mockup sheet, not part of the app. The mark is a key's opening on an obsidian tile, with one red light: the same red that means a request is waiting for you.</p></div></div>
+    <div class="sheet">
+      <div class="box sizes">
+        <figure><svg width="128" height="128"><use href="#mark"/></svg><figcaption class="label">256 · installer</figcaption></figure>
+        <figure><svg width="48" height="48"><use href="#mark"/></svg><figcaption class="label">48</figcaption></figure>
+        <figure><svg width="32" height="32"><use href="#mark"/></svg><figcaption class="label">32</figcaption></figure>
+        <figure><svg width="16" height="16"><use href="#mark"/></svg><figcaption class="label">16 · tray</figcaption></figure>
+      </div>
+      <div class="box pad" style="display:grid;gap:14px;align-content:center">
+        <div class="tbar d"><span class="tb"><i></i></span><span class="tb"><i></i></span><span class="tb on"><svg width="24" height="24"><use href="#mark"/></svg></span><span class="tb"><i></i></span></div>
+        <div class="tbar l"><span class="tb"><i></i></span><span class="tb"><i></i></span><span class="tb on"><svg width="24" height="24"><use href="#mark"/></svg></span><span class="tb"><i></i></span></div>
+        <span class="label">Taskbar, dark and light</span>
+      </div>
+    </div>
+    <div class="box swatches" style="margin-top:16px">
+      <div class="sw"><div class="c" style="background:#0E0F12"></div><div class="t"><b>Obsidian black</b><span>#0E0F12</span></div></div>
+      <div class="sw"><div class="c" style="background:#DCE3EA"></div><div class="t"><b>Ice gray</b><span>#DCE3EA</span></div></div>
+      <div class="sw"><div class="c" style="background:#D40000"></div><div class="t"><b>Racing red</b><span>#D40000</span></div></div>
+    </div>
+  </section>
+</main>
+
+<div class="mock"><span class="label" style="margin-right:8px">Mockup only</span>
+  <button class="pill" id="toggle-idle">Toggle the request</button>
+  <button class="pill" id="to-icon">Icon and colors</button>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+function show(mod) {
+  document.querySelectorAll(".module").forEach((m) => (m.hidden = m.id !== "m-" + mod));
+  document.querySelectorAll(".nav button").forEach((b) => b.dataset.mod === mod ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current"));
+  window.scrollTo(0, 0);
+}
+document.querySelectorAll(".nav button").forEach((b) => b.addEventListener("click", () => show(b.dataset.mod)));
+document.querySelectorAll("[data-goto]").forEach((b) => b.addEventListener("click", () => show(b.dataset.goto)));
+$("#to-icon").addEventListener("click", () => show("icon"));
+
+function done(cls, text) {
+  $("#msg").innerHTML = `<span class="tag ${cls}">${text}</span>`;
+  setTimeout(() => { $("#req").hidden = true; $("#idle").hidden = false; $("#badge").hidden = true; }, 1100);
+}
+function approve(text) {
+  document.querySelectorAll(".decide .btn").forEach((b) => b.classList.add("busy"));
+  if (!$("#pass").value) {
+    $("#msg").innerHTML = '<span class="dot on"></span>Confirm with Windows Hello…';
+    setTimeout(() => done("ok", text), 1400);
+  } else { $("#pass").value = ""; done("ok", text); }
+}
+$("#once").onclick = () => approve("approved once");
+$("#session").onclick = () => approve("approved for 10 min");
+$("#deny").onclick = () => done("no", "denied");
+document.addEventListener("keydown", (e) => {
+  if (e.target.matches("input, select") || $("#req").hidden || $("#m-approvals").hidden) return;
+  if (e.key.toLowerCase() === "a") approve("approved once");
+  if (e.key.toLowerCase() === "d") done("no", "denied");
+});
+$("#toggle-idle").onclick = () => {
+  const showReq = $("#req").hidden;
+  $("#req").hidden = !showReq; $("#idle").hidden = showReq; $("#badge").hidden = !showReq;
+  $("#msg").textContent = "";
+  document.querySelectorAll(".decide .btn").forEach((b) => b.classList.remove("busy"));
+  show("approvals");
+};
+$("#hello").onclick = (e) => {
+  const on = e.currentTarget.getAttribute("aria-checked") === "true";
+  e.currentTarget.setAttribute("aria-checked", String(!on));
+  $("#keyline").hidden = on;
+};
+$("#lock").onclick = () => { $("#vault-state").textContent = "Vault locked"; };
+$("#addhost").onsubmit = (e) => {
+  e.preventDefault();
+  const v = $("#hostin").value.trim(); if (!v) return;
+  const c = document.createElement("span"); c.className = "chip"; c.textContent = v;
+  const x = document.createElement("button"); x.setAttribute("aria-label", "Remove " + v);
+  x.innerHTML = '<svg width="12" height="12"><use href="#i-x"/></svg>'; x.onclick = () => c.remove();
+  c.append(x); $("#chips").append(c); $("#hostin").value = "";
+};
+document.querySelectorAll(".chip button").forEach((b) => (b.onclick = () => b.closest(".chip").remove()));
+document.querySelectorAll(".segs").forEach((g) => g.addEventListener("click", (e) => {
+  const b = e.target.closest(".seg"); if (!b) return;
+  g.querySelectorAll(".seg").forEach((s) => s.setAttribute("aria-pressed", String(s === b)));
+}));
+</script>
+</body>
+</html>

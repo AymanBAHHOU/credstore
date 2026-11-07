@@ -90,6 +90,7 @@ fn kind_of(r: &Response) -> &'static str {
         Response::Denied { .. } => "denied",
         Response::Pending { .. } => "pending",
         Response::Status(_) => "status",
+        Response::Feed(_) => "feed",
         Response::Ok => "ok",
         Response::Error { .. } => "error",
     }

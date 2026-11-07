@@ -41,6 +41,8 @@ thiserror = "2"
 tokio = { version = "1", default-features = false }
 tracing = "0.1"
 toml = "1"
+# Policy edits from the app that keep the file's comments; shares toml's parser crates.
+toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # HTTPS client for http_request (M11): rustls with the Mozilla roots, no gzip, no cookies.
 ureq = { version = "3.5", default-features = false, features = ["rustls"] }
@@ -66,6 +68,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Pipes",
     "Win32_System_Services",
     "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 zeroize = "1"
 

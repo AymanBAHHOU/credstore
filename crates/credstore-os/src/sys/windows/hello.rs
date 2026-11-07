@@ -60,6 +60,7 @@ pub fn available() -> bool {
 /// Create (or replace) the key; Windows asks the user to verify. Returns the public key
 /// as a DER SubjectPublicKeyInfo.
 pub fn create() -> io::Result<Vec<u8>> {
+    let _front = super::foreground::HelloInFront::start();
     let r = KeyCredentialManager::RequestCreateAsync(
         &HSTRING::from(KEY_NAME),
         KeyCredentialCreationOption::ReplaceExisting,
@@ -88,6 +89,7 @@ pub fn sign(message: &[u8]) -> io::Result<Vec<u8>> {
     status(r.Status().map_err(err)?, "opening the Hello key")?;
     let key = r.Credential().map_err(err)?;
     let data = CryptographicBuffer::CreateFromByteArray(message).map_err(err)?;
+    let _front = super::foreground::HelloInFront::start();
     let s = key
         .RequestSignAsync(&data)
         .and_then(|op| op.join())

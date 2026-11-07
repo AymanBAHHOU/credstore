@@ -287,6 +287,33 @@ impl Policy {
     pub fn style(&self) -> MatchStyle {
         self.style
     }
+
+    /// Names that have a `[secret.NAME]` block.
+    pub fn configured_secrets(&self) -> impl Iterator<Item = &str> {
+        self.secrets.keys().map(String::as_str)
+    }
+
+    /// One secret's rules as the app shows them, with `[defaults]` applied.
+    pub fn rules_info(&self, name: &str) -> credstore_proto::SecretRules {
+        let fallback;
+        let (configured, r) = match self.secrets.get(name) {
+            Some(r) => (true, r),
+            None => {
+                fallback = self.default_rules();
+                (false, &fallback)
+            }
+        };
+        credstore_proto::SecretRules {
+            name: name.to_owned(),
+            configured,
+            network: r.network,
+            allow_hosts: r.allow_hosts.clone(),
+            allow_commands: r.commands.as_ref().map(|p| p.raw.clone()),
+            allow_dirs: r.dirs.as_ref().map(|p| p.raw.clone()),
+            require_approval: r.require_approval,
+            grant_ttl_secs: r.grant_ttl_secs,
+        }
+    }
 }
 
 fn check_limits(where_: &str, runtime: u64, output: u64) -> Result<(), PolicyError> {

@@ -95,9 +95,17 @@ async fn serve<S: IpcStream>(
                 Err(e) => error(ErrorCode::BadRequest, e.to_string()),
             },
             Endpoint::Approver => match decode::<ApproverRequest>(&payload) {
-                Ok(req) if matches!(req.op, ApproverOp::SubscribePending) => {
+                Ok(req)
+                    if matches!(
+                        req.op,
+                        ApproverOp::SubscribePending | ApproverOp::SubscribeFeed
+                    ) =>
+                {
                     drop(payload);
-                    match state.verify(&req.proof, &who).await {
+                    match state.verify(&req.proof, &req.op, &who).await {
+                        Ok(()) if req.op == ApproverOp::SubscribeFeed => {
+                            feed(&state, &mut stream, shutdown).await;
+                        }
                         Ok(()) => subscription(&state, &mut stream, shutdown).await,
                         Err(resp) => {
                             let _ = write_message(&mut stream, &resp).await;
@@ -146,6 +154,26 @@ async fn subscription<S: IpcStream>(
             _ = shutdown.changed() => return,
             r = changes.changed() => if r.is_err() { return },
         }
+    }
+}
+
+/// The app's feed: like [`subscription`], with activity and policy, after every audit
+/// record or pending change. Changes that come in a burst are sent once.
+async fn feed<S: IpcStream>(state: &State, stream: &mut S, mut shutdown: watch::Receiver<bool>) {
+    let mut changes = state.feed_version.subscribe();
+    loop {
+        changes.mark_unchanged();
+        let msg = Response::Feed(Box::new(state.feed()));
+        if write_message(stream, &msg).await.is_err() {
+            return;
+        }
+        let mut b = [0u8; 1];
+        tokio::select! {
+            _ = stream.read(&mut b) => return,
+            _ = shutdown.changed() => return,
+            r = changes.changed() => if r.is_err() { return },
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 

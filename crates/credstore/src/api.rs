@@ -14,8 +14,8 @@ use credstore_core::names;
 use credstore_core::vault::{MIN_PASSPHRASE_LEN, MIN_REDACTABLE_LEN};
 use credstore_os::{EndpointKind, Mode, Paths, OS_NAME};
 use credstore_proto::{
-    read_message, write_message, AgentRequest, ApproverOp, ApproverRequest, ErrorCode, GrantScope,
-    Proof, RequestId, Response, SecretInfo, SecretText,
+    read_message, write_message, ActivityEntry, AgentRequest, ApproverOp, ApproverRequest,
+    ErrorCode, Feed, GrantScope, PolicyInfo, Proof, RequestId, Response, SecretInfo, SecretText,
 };
 use serde::{Deserialize, Serialize};
 
@@ -44,6 +44,69 @@ pub struct Overview {
     /// This user has a credstore key in Windows Hello (M13): decisions can be confirmed
     /// with Hello instead of the passphrase.
     pub hello: bool,
+    /// Windows Hello can be set up here (Windows, with Hello configured for this user).
+    pub hello_available: bool,
+}
+
+/// How the app proves who it is when it starts watching.
+pub enum Auth {
+    Passphrase(SecretText),
+    /// Windows shows its Hello dialog once; needs the vault unlocked.
+    Hello,
+}
+
+/// The app's live view (see [`Api::feed`]). Every string that came from an agent or the
+/// policy file went through `printable`.
+#[derive(Debug, Clone, Serialize)]
+pub struct FeedView {
+    pub pending: Vec<RequestView>,
+    pub activity: Vec<ActivityEntry>,
+    pub policy: Option<PolicyInfo>,
+    pub policy_error: Option<String>,
+    pub locked: bool,
+}
+
+fn printable_all(v: &mut [String]) {
+    for s in v {
+        *s = printable(s);
+    }
+}
+
+impl FeedView {
+    fn new(f: Feed) -> Self {
+        let mut activity = f.activity;
+        for a in &mut activity {
+            a.summary = printable(&a.summary);
+            printable_all(&mut a.secrets);
+            for s in [&mut a.detail, &mut a.host, &mut a.cwd, &mut a.via]
+                .into_iter()
+                .flatten()
+            {
+                *s = printable(s);
+            }
+        }
+        let mut policy = f.policy;
+        if let Some(p) = &mut policy {
+            p.path = printable(&p.path);
+            for r in &mut p.secrets {
+                r.name = printable(&r.name);
+                printable_all(&mut r.allow_hosts);
+                for l in [&mut r.allow_commands, &mut r.allow_dirs]
+                    .into_iter()
+                    .flatten()
+                {
+                    printable_all(l);
+                }
+            }
+        }
+        Self {
+            pending: f.pending.iter().map(describe).collect(),
+            activity,
+            policy,
+            policy_error: f.policy_error.map(|e| printable(&e)),
+            locked: f.locked,
+        }
+    }
 }
 
 /// What the human decided about a pending request.
@@ -113,7 +176,86 @@ impl Api {
                 })
                 .collect(),
             hello: crate::approval::Hello::if_present().is_some(),
+            hello_available: credstore_os::approval_key::supported()
+                && credstore_os::approval_key::hello::available(),
         }
+    }
+
+    /// Change where a secret may be used (see [`ApproverOp::SetSecretRules`]).
+    pub async fn set_secret_rules(
+        &self,
+        name: &str,
+        allow_hosts: Option<Vec<String>>,
+        allow_commands: Option<Vec<String>>,
+        pass: SecretText,
+    ) -> Result<()> {
+        names::validate_name(name)?;
+        expect_ok(
+            self.client
+                .approver(
+                    ApproverOp::SetSecretRules {
+                        name: name.to_owned(),
+                        allow_hosts,
+                        allow_commands,
+                    },
+                    pass,
+                )
+                .await?,
+        )
+    }
+
+    /// Change the `[defaults]` timers.
+    pub async fn set_defaults(
+        &self,
+        session_idle_secs: Option<u64>,
+        grant_ttl_secs: Option<u64>,
+        approval_timeout_secs: Option<u64>,
+        pass: SecretText,
+    ) -> Result<()> {
+        expect_ok(
+            self.client
+                .approver(
+                    ApproverOp::SetDefaults {
+                        session_idle_secs,
+                        grant_ttl_secs,
+                        approval_timeout_secs,
+                    },
+                    pass,
+                )
+                .await?,
+        )
+    }
+
+    /// Create a Windows Hello key (Windows asks the user) and enrol it in the vault.
+    pub async fn hello_enrol(&self, pass: SecretText) -> Result<()> {
+        if !credstore_os::approval_key::supported() {
+            bail!("approval keys need Windows Hello; on this system approvals use the passphrase");
+        }
+        self.check_passphrase(pass.clone()).await?;
+        let spki = tokio::task::spawn_blocking(credstore_os::approval_key::hello::create)
+            .await
+            .map_err(|e| anyhow::anyhow!("Windows Hello: {e}"))?
+            .context("Windows Hello did not create the key")?;
+        crate::approval::enrol(&self.client, &spki, &crate::approval::default_label(), pass)
+            .await
+            .map(drop)
+    }
+
+    /// Remove this user's Hello key from the vault and from Windows Hello.
+    pub async fn hello_remove(&self, pass: SecretText) -> Result<()> {
+        let spki = credstore_os::approval_key::hello::public_key()
+            .context("no credstore key in Windows Hello")?;
+        let id = credstore_os::approval_key::key_id(&spki);
+        match crate::approval::remove(&self.client, &id, pass).await {
+            Ok(()) => {}
+            // Enrolled in another vault, or already removed: still delete it from Hello.
+            Err(e) if e.to_string().contains("no approval key") => {}
+            Err(e) => return Err(e),
+        }
+        tokio::task::spawn_blocking(credstore_os::approval_key::hello::delete)
+            .await
+            .map_err(|e| anyhow::anyhow!("Windows Hello: {e}"))??;
+        Ok(())
     }
 
     /// Create the vault. `Ok(false)` if one already exists.
@@ -284,6 +426,36 @@ impl Api {
                 Response::Pending { requests } => {
                     on_update(requests.iter().map(describe).collect());
                 }
+                other => return Err(response_error(other)),
+            }
+        }
+    }
+
+    /// Subscribe to the app's feed (pending requests, activity, policy) and call
+    /// `on_update` each time it changes. Returns when the connection ends.
+    pub async fn feed(&self, auth: Auth, mut on_update: impl FnMut(FeedView) + Send) -> Result<()> {
+        let op = ApproverOp::SubscribeFeed;
+        let proof = match auth {
+            Auth::Passphrase(p) => Proof::Passphrase(p),
+            Auth::Hello => {
+                let signed = op.clone();
+                tokio::task::spawn_blocking(move || {
+                    crate::approval::key_proof(&crate::approval::Hello, &signed)
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!("Windows Hello: {e}"))??
+            }
+        };
+        let mut stream = self.client.connect(EndpointKind::Approver).await?;
+        write_message(&mut stream, &ApproverRequest { proof, op })
+            .await
+            .context("subscribing to credstored")?;
+        loop {
+            let resp: Response = read_message(&mut stream)
+                .await
+                .context("lost the connection to credstored")?;
+            match resp {
+                Response::Feed(f) => on_update(FeedView::new(*f)),
                 other => return Err(response_error(other)),
             }
         }

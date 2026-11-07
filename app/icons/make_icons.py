@@ -1,42 +1,65 @@
 """Generate credstore's app icons (PNG and ICO) with the standard library only.
 
-The icon is a rounded square with a keyhole. Run from anywhere:
+The mark (docs/VISUAL.md): an obsidian rounded tile with a thin gray edge, an ice gray
+slot across the middle (a key's opening), and one racing red dot top right, the same
+red that means a request is waiting. Drawn on a 64-unit grid, like the SVG in
+app/ui/index.html. Run from anywhere:
     python app/icons/make_icons.py
 """
-import math
 import os
 import struct
 import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BG = (24, 94, 88)       # deep teal
-FG = (240, 247, 245)    # off-white
+OBSIDIAN = (0x0E, 0x0F, 0x12)
+EDGE = (0x3A, 0x40, 0x48)
+ICE = (0xDC, 0xE3, 0xEA)
+RED = (0xD4, 0x00, 0x00)
+SS = 6  # supersamples per axis
 
 
-def pixel(x, y, n):
-    """RGBA at (x, y) for an n x n icon, with 4x4 supersampling."""
+def in_rrect(x, y, x0, y0, x1, y1, r):
+    """Point inside the rounded rectangle (x0, y0)-(x1, y1) with corner radius r."""
+    if not (x0 <= x <= x1 and y0 <= y <= y1):
+        return False
+    cx = min(max(x, x0 + r), x1 - r)
+    cy = min(max(y, y0 + r), y1 - r)
+    return (x - cx) ** 2 + (y - cy) ** 2 <= r * r
+
+
+def color_at(x, y):
+    """Color at (x, y) on the 64-unit grid, or None outside the tile."""
+    if not in_rrect(x, y, 0, 0, 64, 64, 16):
+        return None
+    if not in_rrect(x, y, 2, 2, 62, 62, 14):
+        return EDGE
+    if (x - 47) ** 2 + (y - 16) ** 2 <= 25:
+        return RED
+    if in_rrect(x, y, 13, 27, 51, 37, 5):
+        return ICE
+    return OBSIDIAN
+
+
+def pixel(px, py, n):
     acc = [0.0, 0.0, 0.0, 0.0]
-    for sy in range(4):
-        for sx in range(4):
-            u = (x + (sx + 0.5) / 4) / n
-            v = (y + (sy + 0.5) / 4) / n
-            # Rounded square, corner radius 0.2.
-            r = 0.2
-            dx = max(abs(u - 0.5) - (0.5 - r), 0)
-            dy = max(abs(v - 0.5) - (0.5 - r), 0)
-            if math.hypot(dx, dy) > r:
+    for sy in range(SS):
+        for sx in range(SS):
+            x = (px + (sx + 0.5) / SS) * 64 / n
+            y = (py + (sy + 0.5) / SS) * 64 / n
+            c = color_at(x, y)
+            if c is None:
                 continue
-            # Keyhole: circle on top, tapered slot below.
-            cx, cy = 0.5, 0.42
-            in_circle = math.hypot(u - cx, v - cy) < 0.14
-            half = 0.045 + (v - 0.42) * 0.12
-            in_slot = 0.42 <= v <= 0.74 and abs(u - cx) < half
-            c = FG if (in_circle or in_slot) else BG
             acc[0] += c[0]
             acc[1] += c[1]
             acc[2] += c[2]
             acc[3] += 255
-    return tuple(int(round(a / 16)) for a in acc)
+    count = SS * SS
+    alpha = acc[3] / count
+    if alpha == 0:
+        return (0, 0, 0, 0)
+    # Straight (not premultiplied) alpha: average color over covered samples.
+    covered = acc[3] / 255
+    return (round(acc[0] / covered), round(acc[1] / covered), round(acc[2] / covered), round(alpha))
 
 
 def png(n):
@@ -66,15 +89,12 @@ def ico(images):
 
 
 def main():
-    sizes = {32: png(32), 128: png(128), 256: png(256)}
-    with open(os.path.join(HERE, "32x32.png"), "wb") as f:
-        f.write(sizes[32])
-    with open(os.path.join(HERE, "128x128.png"), "wb") as f:
-        f.write(sizes[128])
-    with open(os.path.join(HERE, "icon.png"), "wb") as f:
-        f.write(sizes[256])
+    sizes = {n: png(n) for n in (16, 24, 32, 48, 64, 128, 256)}
+    for name, n in (("32x32.png", 32), ("128x128.png", 128), ("icon.png", 256)):
+        with open(os.path.join(HERE, name), "wb") as f:
+            f.write(sizes[n])
     with open(os.path.join(HERE, "icon.ico"), "wb") as f:
-        f.write(ico([(32, sizes[32]), (256, sizes[256])]))
+        f.write(ico(sorted(sizes.items())))
     print("wrote icons to", HERE)
 
 

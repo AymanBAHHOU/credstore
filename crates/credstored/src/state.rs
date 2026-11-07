@@ -43,6 +43,8 @@ pub(crate) struct State {
     pub(crate) approvals: Mutex<Approvals>,
     /// Bumped whenever the pending list changes; `watch` subscribers wait on it.
     pub(crate) pending_version: tokio::sync::watch::Sender<u64>,
+    /// Bumped on every audit record and pending change; the app's feed waits on it.
+    pub(crate) feed_version: tokio::sync::watch::Sender<u64>,
     /// Commands running now. The idle relock waits for them.
     pub(crate) active_runs: std::sync::atomic::AtomicUsize,
     /// What `harden_process` applied (set by the binary; empty in tests).
@@ -136,6 +138,7 @@ impl State {
             search_path: exec::search_path(),
             approvals: Mutex::new(Approvals::default()),
             pending_version: tokio::sync::watch::channel(0).0,
+            feed_version: tokio::sync::watch::channel(0).0,
             active_runs: std::sync::atomic::AtomicUsize::new(0),
             hardening: Mutex::new(Vec::new()),
         }
@@ -149,10 +152,22 @@ impl State {
     /// closed; elsewhere they are logged.
     pub fn audit(&self, event: &str, id: Option<&str>, f: Value) -> Result<(), String> {
         let mut log = self.audit.lock().unwrap_or_else(|p| p.into_inner());
-        log.append(event, id, fields(f)).map_err(|e| {
+        let r = log.append(event, id, fields(f)).map_err(|e| {
             tracing::error!(%e, event, "audit write failed");
             e.to_string()
-        })
+        });
+        drop(log);
+        self.feed_version.send_modify(|v| *v = v.wrapping_add(1));
+        r
+    }
+
+    /// Where the audit log is (the app's activity history reads it).
+    pub(crate) fn audit_path(&self) -> PathBuf {
+        self.audit
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .path()
+            .to_path_buf()
     }
 
     pub fn is_unlocked(&self) -> bool {
@@ -473,6 +488,36 @@ impl State {
                 self.save(contents, &req.proof, peer, "approval_key_added", &id)
                     .await
             }
+            ApproverOp::SetSecretRules {
+                name,
+                allow_hosts,
+                allow_commands,
+            } => {
+                drop(contents);
+                self.edit_policy(&req.proof, peer, Some(&name), |text| {
+                    credstore_core::policy_edit::set_secret_rules(
+                        text,
+                        &name,
+                        allow_hosts.as_deref(),
+                        allow_commands.as_deref(),
+                    )
+                })
+            }
+            ApproverOp::SetDefaults {
+                session_idle_secs,
+                grant_ttl_secs,
+                approval_timeout_secs,
+            } => {
+                drop(contents);
+                self.edit_policy(&req.proof, peer, None, |text| {
+                    credstore_core::policy_edit::set_defaults(
+                        text,
+                        session_idle_secs,
+                        grant_ttl_secs,
+                        approval_timeout_secs,
+                    )
+                })
+            }
             ApproverOp::RemoveApprovalKey { id } => {
                 let mut contents = contents;
                 if let Err(e) = contents.remove_approval_key(&id) {
@@ -514,7 +559,9 @@ impl State {
                 self.deny(&request_id, peer)
             }
             // Streamed by the server after `verify`.
-            ApproverOp::SubscribePending => error(ErrorCode::BadRequest, "subscribe is streamed"),
+            ApproverOp::SubscribePending | ApproverOp::SubscribeFeed => {
+                error(ErrorCode::BadRequest, "subscribe is streamed")
+            }
             ApproverOp::AdminRun(run) => {
                 // The run can take minutes; other approver requests must not wait on it.
                 drop(_ops);
@@ -524,11 +571,14 @@ impl State {
     }
 
     /// Check a proof on its own (for streaming operations).
-    pub async fn verify(&self, proof: &Proof, peer: &PeerInfo) -> Result<(), Response> {
+    pub async fn verify(
+        &self,
+        proof: &Proof,
+        op: &ApproverOp,
+        peer: &PeerInfo,
+    ) -> Result<(), Response> {
         let _ops = self.vault_ops.lock().await;
-        self.verify_proof(proof, &ApproverOp::SubscribePending, peer)
-            .await
-            .map(drop)
+        self.verify_proof(proof, op, peer).await.map(drop)
     }
 
     async fn admin_init(&self, proof: &Proof, peer: &PeerInfo) -> Response {
