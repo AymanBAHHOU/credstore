@@ -589,7 +589,14 @@ script is fixed for every format.
   code-signing certificate, which the project does not have yet. `build-pkg.sh` signs if
   `SIGN_IDENTITY` is set; the MSI is unsigned.
 
-**Releases.** CI's `packages` job builds and tests the packages on every push. A tag
+**When CI runs (2026-11-07).** Pull requests run every job on Windows and Linux only;
+pushes to `main` and `v*` tags run them on macOS too, so a macOS break shows up on `main`
+after the merge, not on the PR. Pushes to other branches run nothing on their own (the
+pull request runs them), which stops each PR push from running CI twice. The owner chose
+this after the account ran out of Actions minutes; macOS minutes cost ten times Linux
+ones on private repos. The repository was made public the same day.
+
+**Releases.** CI's `packages` job builds and tests the packages on every run. A tag
 `vX.Y.Z` also runs the `release` job, which attaches all packages and a `SHA256SUMS`
 file to a **draft** GitHub release; a human publishes it.
 

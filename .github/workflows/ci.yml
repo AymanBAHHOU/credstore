@@ -1,7 +1,12 @@
 name: CI
 
+# Pushes to main and release tags run everything. Pull requests skip macOS to save
+# runner time (macOS runners are the slowest and the costliest); main still checks macOS
+# after each merge. Branch pushes run nothing on their own: the pull request covers them.
 on:
   push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
 
 env:
@@ -14,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["windows-latest","ubuntu-latest"]' || '["windows-latest","ubuntu-latest","macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -78,7 +83,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["windows-latest","ubuntu-latest"]' || '["windows-latest","ubuntu-latest","macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -178,7 +183,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["windows-latest","ubuntu-latest"]' || '["windows-latest","ubuntu-latest","macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
