@@ -185,6 +185,7 @@ jobs:
           # A change is applied once.
           & $cs policy-apply $id
           if ($LASTEXITCODE -ne 4) { throw "an applied change must be gone ($LASTEXITCODE)" }
+          exit 0
       - name: Service log (Windows)
         if: failure() && runner.os == 'Windows'
         shell: powershell

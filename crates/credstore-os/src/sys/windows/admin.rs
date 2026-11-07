@@ -113,13 +113,23 @@ mod tests {
         drop(f);
         let sddl = win::path_security_sddl(&path).unwrap();
         assert!(sddl.contains("D:P"), "protected DACL: {sddl}");
-        assert!(sddl.contains(&format!(";FR;;;{reader})")), "{sddl}");
-        assert!(!sddl.contains(&format!(";FA;;;{reader})")), "{sddl}");
-        // The reader cannot write it.
-        assert!(std::fs::OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .is_err());
+        // SDDL may write the reader as an alias (the built-in Administrator as `LA`).
+        let reader_rights: Vec<&str> = sddl
+            .split('(')
+            .skip(1)
+            .filter_map(|ace| {
+                let f: Vec<&str> = ace.trim_end_matches(')').split(';').collect();
+                (win::canonical_sid(f.get(5)?) == reader).then(|| f[2])
+            })
+            .collect();
+        assert_eq!(reader_rights, ["FR"], "{sddl}");
+        // The reader cannot write it (unless it is an elevated administrator, as on CI).
+        if !win::token_has_sid("S-1-5-32-544").unwrap_or(false) {
+            assert!(std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .is_err());
+        }
         // It already exists: never reused.
         assert!(create_admin_file(&path, &reader).is_err());
         let _ = std::fs::remove_dir_all(&dir);
