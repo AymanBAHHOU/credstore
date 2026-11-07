@@ -37,6 +37,9 @@ jobs:
       # tests find it next to their own binaries.
       - run: cargo build -p credstored --bins
       - run: cargo test --workspace
+      - name: AppContainer NUL probe (Windows)
+        if: runner.os == 'Windows'
+        run: cargo test -p credstore-tests --test m12_appcontainer nul_device_probe -- --nocapture
       # Windows: again with the Job Object alone (a machine where the AppContainer
       # cannot be used).
       - name: Adversarial suite with the Job Object only (Windows)

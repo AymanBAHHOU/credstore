@@ -78,12 +78,23 @@ fn main() {
         // Start a detached helper that writes `arg(1)` after `arg(2)` seconds, then hang.
         "spawn-sleeper" => {
             let me = std::env::current_exe().expect("own path");
-            let child = std::process::Command::new(me)
-                .args(["sleep-write", &arg(1), &arg(2)])
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn();
+            let spawn = |null: bool| {
+                let io = || {
+                    if null {
+                        std::process::Stdio::null()
+                    } else {
+                        std::process::Stdio::piped()
+                    }
+                };
+                std::process::Command::new(&me)
+                    .args(["sleep-write", &arg(1), &arg(2)])
+                    .stdin(io())
+                    .stdout(io())
+                    .stderr(io())
+                    .spawn()
+            };
+            // Some Windows editions refuse NUL to an AppContainer; pipes always work.
+            let child = spawn(true).or_else(|_| spawn(false));
             match child {
                 Ok(c) => {
                     let _ = writeln!(out, "spawned {}", c.id());

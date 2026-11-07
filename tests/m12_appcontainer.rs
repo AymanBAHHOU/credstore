@@ -133,3 +133,29 @@ async fn the_container_cannot_read_the_humans_files() {
     assert!(Path::new(&path).exists());
     d.stop().await;
 }
+
+/// What a command sees of the NUL device inside the container. Some Windows editions
+/// refuse it; this records which (CI prints it), and fails only if cmd itself cannot run.
+#[tokio::test]
+async fn nul_device_probe() {
+    let d = ready("m12-nul", "").await;
+    let r = d
+        .run(run_request(
+            &["cmd.exe", "/d", "/c", "echo probe>NUL && echo nul-ok"],
+            &["API_KEY"],
+            &d.work(),
+        ))
+        .await;
+    let Response::RunResult(r) = r else {
+        panic!("expected a run result, got {r:?}");
+    };
+    eprintln!(
+        "NUL probe ({}): exit {:?}, stdout {:?}, stderr {:?}",
+        mode_name(capabilities().mode),
+        r.exit_code,
+        r.stdout.trim(),
+        r.stderr.trim()
+    );
+    assert!(r.exit_code.is_some(), "{r:?}");
+    d.stop().await;
+}
