@@ -168,7 +168,13 @@ pub async fn doctor(
     }
 
     service_checks(&mut d, client, mode);
-    group_checks(&mut d, mode, &user);
+    // Whether each endpoint lets this process in, for the group checks: on Windows a
+    // member added after logon gets in through the daemon's users file, not the group.
+    let reachable = [
+        client.connect(EndpointKind::Agent).await.is_ok(),
+        client.connect(EndpointKind::Approver).await.is_ok(),
+    ];
+    group_checks(&mut d, mode, &user, reachable);
     file_checks(&mut d, client, mode, &user, privileged);
     let daemon_pid = endpoint_checks(&mut d, client).await;
     memory_check(&mut d, mode, &user, privileged, daemon_pid);
@@ -233,7 +239,7 @@ fn service_checks(d: &mut Doctor<'_>, client: &Client, mode: Mode) {
     );
 }
 
-fn group_checks(d: &mut Doctor<'_>, mode: Mode, user: &str) {
+fn group_checks(d: &mut Doctor<'_>, mode: Mode, user: &str, reachable: [bool; 2]) {
     if mode == Mode::Dev {
         d.check(
             Level::Info,
@@ -242,7 +248,10 @@ fn group_checks(d: &mut Doctor<'_>, mode: Mode, user: &str) {
         );
         return;
     }
-    for (group, role) in [(AGENTS_GROUP, "agent"), (APPROVERS_GROUP, "approver")] {
+    for ((group, role), reachable) in [(AGENTS_GROUP, "agent"), (APPROVERS_GROUP, "approver")]
+        .into_iter()
+        .zip(reachable)
+    {
         match probe::group_membership(group) {
             Ok(m) if m.active => {
                 d.check(Level::Ok, "groups", format!("{user} is in {group}"));
@@ -256,6 +265,17 @@ fn group_checks(d: &mut Doctor<'_>, mode: Mode, user: &str) {
                 format!(
                     "{user} is in {group}; this session predates it, so it applies at the \
                      next logon (the installer also lets you in directly)"
+                ),
+            ),
+            // Windows cannot cheaply say whether the account is listed; the endpoint
+            // letting it in (the installer's users file) is what matters.
+            Ok(_) if reachable => d.check(
+                Level::Info,
+                "groups",
+                format!(
+                    "{group} is not active in this session, but the service lets {user} in \
+                     directly (the installer listed this account), so the {role} endpoint \
+                     works; the group applies from the next logon"
                 ),
             ),
             Ok(_) => d.check(
