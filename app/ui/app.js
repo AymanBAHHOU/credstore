@@ -224,7 +224,7 @@ function renderConnect() {
         say(msg, "");
         renderAll();
       } catch (e) {
-        let text = String(e);
+        let text = helloError(String(e));
         if (!passphrase && /locked/i.test(text)) text = "Windows Hello works while the vault is unlocked. Use your passphrase this time.";
         say(msg, text, false);
       } finally {
@@ -247,6 +247,28 @@ function normalize(f) {
   for (const a of f.activity) a.secrets = a.secrets || [];
   if (f.policy) for (const r of f.policy.secrets) r.allow_hosts = r.allow_hosts || [];
   return f;
+}
+
+/**
+ * Windows Hello as far as this vault is concerned:
+ * "none" (no credstore key in Windows Hello), "unknown" (not connected yet),
+ * "locked" (the vault is locked: Hello cannot confirm, and the list of trusted keys is
+ * inside the vault), "enrolled" (this vault trusts the key), or "stale" (a key left
+ * from an older vault, for example after a reinstall).
+ */
+function helloState() {
+  if (!overview || !overview.hello) return "none";
+  if (!feed) return "unknown";
+  if (feed.locked || !feed.approval_keys) return "locked";
+  return feed.approval_keys.includes(overview.hello_key_id) ? "enrolled" : "stale";
+}
+
+const STALE_HELLO = "This vault does not trust the Windows Hello key on this computer (it was made for an older vault). Turn Windows Hello on again on the Security page to replace it.";
+
+/** Daemon errors about Hello, in plain words. */
+function helloError(text) {
+  if (/unknown key/.test(text)) return STALE_HELLO;
+  return text;
 }
 
 listen("feed", (event) => {
@@ -321,7 +343,7 @@ function kvRows(r) {
 function requestCard(r) {
   const dl = el("dl", { class: "kv" },
     kvRows(r).flatMap(([k, v]) => [el("dt", { class: "label" }, k), el("dd", {}, v)]));
-  const hello = overview && overview.hello;
+  const hello = helloState() === "enrolled";
   const pass = el("input", {
     class: "input", type: "password", autocomplete: "off", "aria-label": "Passphrase",
     placeholder: hello ? "Passphrase, or leave empty for Windows Hello" : "Passphrase to confirm",
@@ -329,8 +351,12 @@ function requestCard(r) {
   const msg = el("p", { class: "msg" });
   const buttons = [];
   const decide = async (decision, label) => {
-    const h = overview && overview.hello;
-    if (!pass.value && !h) return say(msg, "Enter your passphrase to confirm.", false);
+    if (!pass.value) {
+      const h = helloState();
+      if (h === "stale") return say(msg, STALE_HELLO, false);
+      if (h === "locked") return say(msg, "The vault is locked, so Windows Hello cannot confirm. Enter your passphrase.", false);
+      if (h !== "enrolled") return say(msg, "Enter your passphrase to confirm.", false);
+    }
     const p = take(pass);
     say(msg, p ? "Checking…" : "Confirm with Windows Hello…");
     buttons.forEach((b) => b.classList.add("busy"));
@@ -342,9 +368,9 @@ function requestCard(r) {
       }
       if (out.kind === "wrong_passphrase") say(msg, "Wrong passphrase. The request is still waiting.", false);
       else if (!p && /locked/i.test(out.message)) say(msg, "The vault is locked, so Windows Hello cannot confirm. Enter your passphrase.", false);
-      else say(msg, out.message, false);
+      else say(msg, helloError(out.message), false);
     } catch (e) {
-      say(msg, String(e), false);
+      say(msg, helloError(String(e)), false);
     }
     buttons.forEach((b) => b.classList.remove("busy"));
   };
@@ -729,7 +755,12 @@ function renderSecurity() {
   const windows = o && (o.hello_available || o.hello);
   $("hello-box").hidden = !windows;
   if (windows) {
-    $("hello").setAttribute("aria-checked", String(!!o.hello));
+    // Before connecting, or while locked, the app can only see Windows' side.
+    const h = helloState();
+    $("hello").setAttribute("aria-checked", String(h === "enrolled" || h === "locked" || h === "unknown"));
+    $("hello-note").textContent = h === "stale"
+      ? "Windows Hello has a credstore key from an older vault, which this vault does not trust. Turn the switch on to replace it."
+      : h === "locked" ? "The vault is locked. Hello can confirm again once you unlock it with your passphrase." : "";
   }
   const p = feed && feed.policy;
   $("timers").hidden = !p;

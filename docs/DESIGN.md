@@ -779,6 +779,19 @@ the service: that is a change to who may set policy, for the owner to decide.
 `AddApprovalKey`, after checking the passphrase) or removes the key, the same steps as
 `credstore hello enrol` / `remove`.
 
+**Hello key from an older vault (2026-11-07, found by the owner).** The Hello key lives
+in the user's Windows profile, the list of trusted keys in the vault. After a reinstall
+with the data directory deleted, Windows still had the old key, so the switch showed
+"on" and every Hello approval failed with "approval key rejected: unknown key". The
+feed now carries `approval_keys`, the ids of the keys the vault trusts (`None` while the
+vault is locked, because the list is inside it), and the overview carries
+`hello_key_id`, the id of this user's Hello key. The switch is on only when the vault
+trusts the key; for a key from an older vault it is off, with a note, and turning it on
+replaces the key. Request boxes offer "leave empty for Windows Hello" only when Hello
+can confirm (trusted key, vault open), and "unknown key" is explained in plain words in
+the app and in `credstore watch`. Key ids are hashes of public keys and the feed needs
+the passphrase or an enrolled key, so the list widens nothing.
+
 **Window and dialog in front.** On a new request the app shows and unminimizes the
 window, sets it topmost for a moment and back, asks for focus, and flashes the taskbar
 button: Windows does not let a background app take the keyboard, but the window becomes

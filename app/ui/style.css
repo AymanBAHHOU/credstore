@@ -129,7 +129,8 @@ kbd { font: 500 11px/1 var(--mono); padding: 3px 5px; border-radius: 4px; border
 .input[readonly] { color: var(--text-2); }
 
 .msg { color: var(--text-2); font-size: 13.5px; }
-.msg:empty { display: none; }
+.msg:empty, .help.row-msg:empty { display: none; }
+.help.row-msg { margin-top: 0; }
 .msg.ok { color: var(--ice); }
 .msg.bad { color: var(--red-text); }
 #secrets-msg, #grant-msg, #approvals-msg { margin-top: 14px; }

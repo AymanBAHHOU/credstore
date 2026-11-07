@@ -41,9 +41,12 @@ pub struct Overview {
     /// Why the daemon could not be reached, with what to do.
     pub error: Option<String>,
     pub secrets: Vec<SecretInfo>,
-    /// This user has a credstore key in Windows Hello (M13): decisions can be confirmed
-    /// with Hello instead of the passphrase.
+    /// This user has a credstore key in Windows Hello (M13). The vault may not trust it
+    /// (a key left from an older vault): compare `hello_key_id` with
+    /// `Feed::approval_keys`.
     pub hello: bool,
+    /// The id of that key, as the daemon names enrolled keys.
+    pub hello_key_id: Option<String>,
     /// Windows Hello can be set up here (Windows, with Hello configured for this user).
     pub hello_available: bool,
 }
@@ -162,6 +165,9 @@ impl Api {
                 Vec::new(),
             ),
         };
+        let hello_key_id = credstore_os::approval_key::hello::public_key()
+            .ok()
+            .map(|k| credstore_os::approval_key::key_id(&k));
         Overview {
             mode,
             os: OS_NAME,
@@ -175,7 +181,8 @@ impl Api {
                     description: printable(&s.description),
                 })
                 .collect(),
-            hello: crate::approval::Hello::if_present().is_some(),
+            hello: hello_key_id.is_some(),
+            hello_key_id,
             hello_available: credstore_os::approval_key::supported()
                 && credstore_os::approval_key::hello::available(),
         }

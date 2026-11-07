@@ -26,6 +26,7 @@ impl State {
             policy: policy.as_ref().ok().map(|p| self.policy_info(p)),
             policy_error: policy.err(),
             locked: !self.is_unlocked(),
+            approval_keys: self.approval_key_ids(),
         }
     }
 

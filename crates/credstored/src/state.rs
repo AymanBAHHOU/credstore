@@ -177,6 +177,22 @@ impl State {
             .is_some()
     }
 
+    /// Ids of the enrolled approval keys, or `None` while locked. Does not count as use
+    /// of the vault (the idle timer is not reset).
+    pub(crate) fn approval_key_ids(&self) -> Option<Vec<String>> {
+        self.unlocked
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .map(|u| {
+                u.contents
+                    .approval_keys()
+                    .into_iter()
+                    .map(|k| k.id)
+                    .collect()
+            })
+    }
+
     /// Keep `contents` in memory until the idle TTL (or `lock`).
     pub fn set_unlocked(&self, contents: VaultContents) {
         *self.unlocked.lock().unwrap_or_else(|p| p.into_inner()) = Some(Unlocked {
