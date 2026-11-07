@@ -48,12 +48,24 @@
     <div class="acts"><button class="btn sm" id="retry">Try again</button><button class="btn sm primary" data-goto="health">Open Health</button></div>
   </div>
 
+  <!-- ================= FIRST RUN ================= -->
+  <!-- Opens by itself on first launch while setup is not finished; Health can reopen it. -->
+  <section class="module" id="m-welcome" hidden>
+    <div class="head"><div><h1>Set up credstore</h1><p class="lede">Your agents will use your API keys without ever seeing them. Two steps, and one more if you want it; each can be done again later.</p></div></div>
+    <ol class="steps" id="steps"></ol>
+    <div class="guide-foot">
+      <button class="btn" id="guide-later" type="button">Finish later</button>
+      <span class="grow msg" id="guide-msg"></span>
+      <button class="btn primary" id="guide-done" type="button" disabled>Add your first secret</button>
+    </div>
+  </section>
+
   <!-- ================= APPROVALS ================= -->
   <section class="module" id="m-approvals">
     <div class="head"><div><h1>Approvals</h1><p class="lede">An agent wants to use one of your secrets. Read what will be sent and where, then decide. Nothing runs until you do.</p></div></div>
     <div class="connect-slot"></div>
     <div id="requests"></div>
-    <div class="box idle" id="idle" hidden><span class="dot on"></span>No requests waiting. credstore keeps running in the tray and brings this window forward when an agent asks.</div>
+    <div class="box idle" id="idle" hidden><span class="dot on"></span>No requests waiting. credstore keeps running in the tray; when an agent asks, the request appears at the top of your screen.</div>
     <div id="refused"></div>
     <p class="msg" id="approvals-msg"></p>
   </section>
@@ -163,6 +175,11 @@
         <p class="msg" id="doctor-summary"></p>
       </form>
       <ul class="checks sep" id="doctor-checks" hidden></ul>
+    </div>
+    <div class="box notice">
+      <span class="dot"></span>
+      <p>Setting up again on this computer, or after a reinstall? The setup guide walks through the vault, Claude Code and Windows Hello.</p>
+      <div class="acts"><button class="btn sm" id="open-guide" type="button">Open the setup guide</button></div>
     </div>
   </section>
 

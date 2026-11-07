@@ -58,6 +58,7 @@ let activityFilter = "all";
 // ------------------------------------------------------------------ navigation
 
 function show(mod) {
+  document.body.classList.toggle("guiding", mod === "welcome");
   for (const m of document.querySelectorAll(".module")) m.hidden = m.id !== "m-" + mod;
   for (const b of document.querySelectorAll(".nav button")) {
     if (b.dataset.mod === mod) b.setAttribute("aria-current", "page");
@@ -873,10 +874,198 @@ $("doctor-form").addEventListener("submit", async (ev) => {
   }
 });
 
+// ------------------------------------------------------------------ first-run guide
+
+// Opens by itself the first time the app runs, while setup is not finished: create the
+// vault, connect Claude Code, and optionally turn on Windows Hello. The same steps as
+// `credstore setup`, done with the app's own commands. Health can reopen it.
+
+const GUIDE_KEY = "credstore.guide"; // "done" once finished or put off
+const guide = {
+  vault: false,       // a vault is known to exist (it has secrets, was created, or already existed)
+  claude: undefined,  // what `claude` returned
+  helloOn: false,     // Hello was turned on in the guide
+  skipped: new Set(), // steps put off
+  msgs: {},           // step id -> [text, ok]
+};
+
+function guideSeen() {
+  try { return localStorage.getItem(GUIDE_KEY) === "done"; } catch { return false; }
+}
+function markGuideSeen() {
+  try { localStorage.setItem(GUIDE_KEY, "done"); } catch { /* the guide just opens again */ }
+}
+
+const claudeDone = (s) => !!s && s.registered && s.missing_rules.length === 0;
+const helloOffered = () => !!overview && (overview.hello_available || overview.hello);
+const helloDone = () => guide.helloOn || helloStateOf(overview, feed) === "enrolled";
+
+async function loadClaudeState() {
+  try { guide.claude = await invoke("claude"); } catch { guide.claude = null; }
+}
+
+async function openGuide() {
+  guide.vault = guide.vault || (!!overview && overview.secrets.length > 0);
+  guide.skipped.clear();
+  guide.msgs = {};
+  await loadClaudeState();
+  show("welcome");
+  renderGuide();
+}
+
+function guideSteps() {
+  const steps = [
+    { id: "vault", title: "Create your vault", done: guide.vault, body: vaultStep },
+    { id: "claude", title: "Connect Claude Code", done: claudeDone(guide.claude), body: claudeStep },
+  ];
+  if (helloOffered()) steps.push({ id: "hello", title: "Approve with Windows Hello", optional: true, done: helloDone(), body: helloStep });
+  return steps;
+}
+
+function renderGuide() {
+  const steps = guideSteps();
+  const active = steps.find((s) => !s.done && !guide.skipped.has(s.id));
+  $("steps").replaceChildren(...steps.map((s, i) => {
+    const state = s.done ? "done" : guide.skipped.has(s.id) ? "later" : s === active ? "" : s.optional ? "optional" : "next";
+    const msg = el("p", { class: "msg" });
+    if (guide.msgs[s.id]) say(msg, guide.msgs[s.id][0], guide.msgs[s.id][1]);
+    return el("li", { class: "step" + (s.done ? " done" : "") + (s === active ? " active" : "") },
+      el("div", { class: "step-head" },
+        el("span", { class: "step-num", "aria-hidden": "true" }, s.done ? icon("i-check") : String(i + 1)),
+        el("h2", {}, s.title),
+        el("span", { class: "step-state" }, state)),
+      s === active ? el("div", { class: "step-body" }, ...s.body(), msg)
+        : s.done && guide.msgs[s.id] ? el("div", { class: "step-body" }, msg) : null);
+  }));
+  $("guide-done").disabled = !guide.vault;
+  say("guide-msg", guide.vault ? "" : "The vault is needed; the other steps can wait.");
+}
+
+function stepMsg(id, text, ok) {
+  guide.msgs[id] = [text, ok];
+  renderGuide();
+}
+
+function laterButton(id) {
+  return el("button", { class: "btn", type: "button", onclick: () => { guide.skipped.add(id); renderGuide(); } }, "Later");
+}
+
+function vaultStep() {
+  const pass = el("input", { class: "input", type: "password", autocomplete: "new-password", placeholder: "Passphrase", "aria-label": "Passphrase" });
+  const repeat = el("input", { class: "input", type: "password", autocomplete: "new-password", placeholder: "Repeat it", "aria-label": "Repeat the passphrase" });
+  const go = el("button", { class: "btn primary" }, "Create vault");
+  const form = el("form", { class: "step-acts", onsubmit: async (ev) => {
+    ev.preventDefault();
+    const p = take(pass);
+    const r = take(repeat);
+    go.classList.add("busy");
+    try {
+      const created = await invoke("create_vault", { passphrase: p, repeat: r });
+      guide.vault = true;
+      if (created) {
+        // Connect with the same passphrase, so requests reach the island right away.
+        try { await invoke("start_watching", { passphrase: p }); watching = true; } catch { /* Approvals offers Connect */ }
+        guide.msgs.vault = ["Vault created. Keep the passphrase somewhere safe: it cannot be recovered.", true];
+      } else {
+        guide.msgs.vault = ["You already have a vault on this computer, so nothing changed. Its passphrase stays the same.", true];
+      }
+      await refresh();
+      renderGuide();
+    } catch (e) {
+      go.classList.remove("busy");
+      stepMsg("vault", String(e), false);
+    }
+  } }, pass, repeat, go);
+  return [
+    el("p", { class: "help" }, "The passphrase encrypts every secret and confirms every approval. At least 12 characters. Nobody can recover it, so keep it somewhere safe, such as a password manager."),
+    form,
+  ];
+}
+
+function claudeStep() {
+  const s = guide.claude;
+  const again = el("button", { class: "btn", type: "button", onclick: async () => { await loadClaudeState(); renderGuide(); } }, "Check again");
+  if (s === null) {
+    return [el("p", { class: "help" }, "No home folder was found for this account, so Claude Code cannot be set up from here."), el("div", { class: "step-acts" }, laterButton("claude"))];
+  }
+  if (!s.found) {
+    return [
+      el("p", { class: "help" }, "Claude Code is not installed on this computer (the claude command was not found). Install it, then check again. You can also connect it later from the Claude Code page."),
+      el("div", { class: "step-acts" }, again, laterButton("claude")),
+    ];
+  }
+  const go = el("button", { class: "btn primary", type: "button", onclick: async () => {
+    go.classList.add("busy");
+    try {
+      await invoke("connect_claude");
+      guide.msgs.claude = ["Connected. Restart any open Claude Code sessions to pick it up.", true];
+    } catch (e) {
+      guide.msgs.claude = [String(e), false];
+    }
+    await loadClaudeState();
+    renderGuide();
+  } }, "Connect Claude Code");
+  return [
+    el("p", { class: "help" }, "Makes credstore available to Claude Code in every folder, and stops Claude Code from reading .env files and credstore's own files."),
+    el("ul", { class: "checks" },
+      checkItem(s.registered ? "on" : "ring", "connected", s.registered ? "credstore is available to Claude Code." : "Not yet."),
+      checkItem(s.missing_rules.length ? "ring" : "on", "deny rules", s.missing_rules.length ? "To add: " + s.missing_rules.join(", ") : "In place.")),
+    el("div", { class: "step-acts" }, go, laterButton("claude")),
+  ];
+}
+
+function helloStep() {
+  if (overview && !overview.hello_available) {
+    return [el("p", { class: "help" }, "Windows Hello is not set up for this account. Set up a PIN, face or fingerprint in Settings > Accounts > Sign-in options, then turn it on from the Security page."), el("div", { class: "step-acts" }, laterButton("hello"))];
+  }
+  const pass = el("input", { class: "input", type: "password", autocomplete: "off", placeholder: "Vault passphrase", "aria-label": "Vault passphrase" });
+  const go = el("button", { class: "btn primary" }, "Turn on Windows Hello");
+  const form = el("form", { class: "step-acts", onsubmit: async (ev) => {
+    ev.preventDefault();
+    const p = take(pass);
+    if (!p) return stepMsg("hello", "Enter your vault passphrase.", false);
+    go.classList.add("busy");
+    try {
+      await invoke("set_hello", { on: true, passphrase: p });
+      guide.helloOn = true;
+      guide.msgs.hello = ["Windows Hello is on. It confirms approvals while the vault is unlocked.", true];
+      await refresh();
+      renderGuide();
+    } catch (e) {
+      go.classList.remove("busy");
+      stepMsg("hello", helloError(String(e)), false);
+    }
+  } }, pass, go, laterButton("hello"));
+  return [
+    el("p", { class: "help" }, "Optional. Confirm requests with your face, fingerprint or PIN instead of typing the passphrase each time. It works while the vault is unlocked; unlocking still needs the passphrase. Windows asks you to verify once."),
+    form,
+  ];
+}
+
+$("guide-done").addEventListener("click", () => {
+  markGuideSeen();
+  show("secrets");
+  openSecretForm(null);
+});
+$("guide-later").addEventListener("click", () => {
+  markGuideSeen();
+  show("approvals");
+});
+$("open-guide").addEventListener("click", openGuide);
+
+/** First launch: open the guide if setup is not finished; otherwise never again. */
+async function maybeOpenGuide(o) {
+  if (!o.reachable || guideSeen()) return;
+  await loadClaudeState();
+  if (o.secrets.length > 0 && claudeDone(guide.claude)) return markGuideSeen();
+  openGuide();
+}
+
 // ------------------------------------------------------------------ start
 
 refresh().then((o) => {
   if (!o.reachable) show("health");
+  else maybeOpenGuide(o);
   invoke("page_ready", { summary: `${o.mode} reachable=${o.reachable} secrets=${o.secrets.length}` });
 }).catch((e) => {
   $("service-text").textContent = "Error";

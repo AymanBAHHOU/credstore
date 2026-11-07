@@ -35,16 +35,17 @@ The full design is in [SPEC.md](SPEC.md); where the code differs from it, and wh
 | Fedora, RHEL | `credstore-VERSION.x86_64.rpm` | `sudo dnf install ./credstore-VERSION.x86_64.rpm` |
 
 The package installs the service and allows the user who installed it (no need to sign
-out first). Then run, as yourself:
+out first). On Windows the installer then opens the desktop app, which walks you through
+setup the first time: create the vault (you choose the passphrase), connect Claude Code,
+and optionally turn on Windows Hello. Health > "Open the setup guide" runs it again.
+From a terminal (or on Linux), run, as yourself:
 
 ```bash
 credstore setup
 ```
 
-It creates the vault (you choose the passphrase) and, if you agree, registers credstore
-with Claude Code for all folders and adds Claude Code deny rules for `.env` files and
-credstore's own files. On Windows a Start menu entry, "credstore setup", runs the same
-thing.
+It creates the vault and, if you agree, registers credstore with Claude Code for all
+folders and adds Claude Code deny rules for `.env` files and credstore's own files.
 
 **Desktop app.** The Windows and macOS packages also install the credstore app (Start
 menu "credstore", or `/Applications/credstore.app`); on Linux install
