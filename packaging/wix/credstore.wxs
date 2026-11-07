@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  credstore Windows installer (M8). Built by packaging/build-msi.ps1 with WiX 5.
+
+  The MSI owns the files, the PATH entry and a Start menu shortcut to `credstore setup`.
+  Everything else (service, groups, ACLs, policy) is done by the same install.ps1 that
+  installs from source, run with -Package as a deferred custom action (as SYSTEM).
+
+  Public properties (msiexec /i credstore.msi NAME=value):
+    CREDSTOREUSER    account added to the credstore groups (default: the installing user)
+    ENCRYPTPAGEFILE  1 (default) turns on page file encryption; 0 leaves it alone
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="credstore"
+      Manufacturer="credstore"
+      Version="$(var.Version)"
+      UpgradeCode="6f3c2a4e-8d1b-4c7a-9e55-2b7d0c9a41f3"
+      Scope="perMachine"
+      Compressed="yes">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of credstore is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="ARPCOMMENTS" Value="Lets coding agents use secrets without seeing them." />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/AymanBAHHOU/credstore" />
+    <Property Id="ENCRYPTPAGEFILE" Value="1" Secure="yes" />
+    <Property Id="CREDSTOREUSER" Secure="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="credstore" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="Files" Directory="INSTALLFOLDER">
+      <Component>
+        <File Source="$(var.BinDir)\credstore.exe" KeyPath="yes" />
+      </Component>
+      <Component>
+        <File Source="$(var.BinDir)\credstored.exe" KeyPath="yes" />
+      </Component>
+      <Component>
+        <File Source="$(var.DeployDir)\install.ps1" KeyPath="yes" />
+      </Component>
+      <Component>
+        <File Source="$(var.DeployDir)\policy.toml" KeyPath="yes" />
+      </Component>
+      <Component Id="PathEntry" Guid="0c1f7e52-3b9a-4d61-8f0e-7a2c5d9b13e8">
+        <Environment Id="PathEntry" Name="PATH" Value="[INSTALLFOLDER]" Part="last"
+                     Action="set" System="yes" />
+        <RegistryValue Root="HKLM" Key="Software\credstore" Name="PathEntry"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="SetupShortcut" Guid="9a4e2d17-6c3b-4f08-b1d5-e8f27a03c6b9">
+        <Shortcut Id="SetupShortcut" Name="credstore setup"
+                  Description="Create the credstore vault and connect Claude Code"
+                  Target="[System64Folder]cmd.exe"
+                  Arguments="/k &quot;[INSTALLFOLDER]credstore.exe&quot; setup"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\credstore" Name="SetupShortcut"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <Feature Id="Main">
+      <ComponentGroupRef Id="Files" />
+      <ComponentRef Id="SetupShortcut" />
+    </Feature>
+
+    <!-- The installing user, unless CREDSTOREUSER was given. -->
+    <SetProperty Id="CREDSTOREUSER" Value="[LogonUser]" Before="InstallInitialize"
+                 Sequence="execute" Condition="NOT CREDSTOREUSER" />
+
+    <!-- Deferred actions get their command line through a property named after them. -->
+    <SetProperty Id="CsInstall" Before="CsInstall" Sequence="execute"
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]install.ps1&quot; -Package -User &quot;[CREDSTOREUSER]&quot; -EncryptPageFile &quot;[ENCRYPTPAGEFILE]&quot;" />
+    <SetProperty Id="CsRollback" Before="CsRollback" Sequence="execute"
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]install.ps1&quot; -Package -Uninstall" />
+    <SetProperty Id="CsUninstall" Before="CsUninstall" Sequence="execute"
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]install.ps1&quot; -Package -Uninstall" />
+
+    <!-- WixQuietExec runs without a console window and copies output to the MSI log. -->
+    <CustomAction Id="CsRollback" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec"
+                  Execute="rollback" Impersonate="no" Return="ignore" />
+    <CustomAction Id="CsInstall" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec"
+                  Execute="deferred" Impersonate="no" Return="check" />
+    <CustomAction Id="CsUninstall" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="CsUninstall" Before="RemoveFiles" Condition="REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="CsRollback" Before="CsInstall" Condition="NOT REMOVE" />
+      <Custom Action="CsInstall" Before="InstallFinalize" Condition="NOT REMOVE" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>

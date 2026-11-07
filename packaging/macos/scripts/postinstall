@@ -1,0 +1,9 @@
+#!/bin/bash
+# Runs as root after the .pkg payload is in place. The user at the console (the one who
+# double-clicked the package) is added to the credstore groups.
+set -euo pipefail
+user="$(stat -f%Su /dev/console 2>/dev/null || true)"
+if [ -n "$user" ] && [ "$user" != root ]; then
+    exec /usr/local/share/credstore/install.sh --package --bin /usr/local/bin --user "$user"
+fi
+exec /usr/local/share/credstore/install.sh --package --bin /usr/local/bin

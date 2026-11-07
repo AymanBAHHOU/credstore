@@ -10,6 +10,10 @@ credstore-agents and credstore-approvers with -User in both, and %ProgramData%\c
 readable only by SYSTEM, Administrators and the service. The daemon builds its pipe ACLs
 from the group SIDs. Safe to re-run: the vault, policy and audit log are kept.
 
+.PARAMETER Package
+Called by the MSI: the binaries are already in place and the MSI owns them and the PATH
+entry. -Uninstall then only removes the service.
+
 .EXAMPLE
 .\deploy\install.ps1
 .\deploy\install.ps1 -From C:\Downloads\credstore -User MYPC\me
@@ -20,13 +24,17 @@ param(
     [string]$From = (Join-Path $PSScriptRoot '..\target\release'),
     # The human who approves requests and runs the agent.
     [string]$User = "$env:USERDOMAIN\$env:USERNAME",
+    # '1' turns on page file encryption (fsutil), so paged-out secrets are not left on
+    # disk. A string so the MSI can pass its property as is.
+    [string]$EncryptPageFile = '0',
+    [switch]$Package,
     [switch]$Uninstall
 )
 $ErrorActionPreference = 'Stop'
 
 $Service = 'credstore'
 $Account = 'NT SERVICE\credstore'
-$InstallDir = Join-Path $env:ProgramFiles 'credstore'
+$InstallDir = if ($Package) { $PSScriptRoot } else { Join-Path $env:ProgramFiles 'credstore' }
 $DataDir = Join-Path $env:ProgramData 'credstore'
 $Groups = @('credstore-agents', 'credstore-approvers')
 $AgentPipe = '\\.\pipe\credstore-agent'
@@ -54,8 +62,10 @@ if ($Uninstall) {
         Stop-Service $Service -Force -ErrorAction SilentlyContinue
         Invoke-Native sc.exe @('delete', $Service)
     }
-    Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue
-    Remove-FromMachinePath $InstallDir
+    if (-not $Package) {
+        Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue
+        Remove-FromMachinePath $InstallDir
+    }
     Say "removed the service and $InstallDir"
     Write-Host "Kept (delete by hand if you want them gone): $DataDir (vault, policy, audit log)"
     Write-Host "and the credstore-agents and credstore-approvers groups."
@@ -64,6 +74,7 @@ if ($Uninstall) {
 
 # -------------------------------- install ---------------------------------
 
+if ($Package) { $From = $InstallDir }
 foreach ($b in 'credstore.exe', 'credstored.exe') {
     if (-not (Test-Path (Join-Path $From $b))) {
         throw "missing $(Join-Path $From $b) (build with: cargo build --release)"
@@ -75,12 +86,14 @@ if (Get-Service $Service -ErrorAction SilentlyContinue) {
     Stop-Service $Service -Force
 }
 
-Say "binaries -> $InstallDir"
-New-Item -ItemType Directory -Force $InstallDir | Out-Null
-Copy-Item (Join-Path $From 'credstore.exe'), (Join-Path $From 'credstored.exe') $InstallDir -Force
-$machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-if (($machinePath -split ';') -notcontains $InstallDir) {
-    [Environment]::SetEnvironmentVariable('Path', "$machinePath;$InstallDir", 'Machine')
+if (-not $Package) {
+    Say "binaries -> $InstallDir"
+    New-Item -ItemType Directory -Force $InstallDir | Out-Null
+    Copy-Item (Join-Path $From 'credstore.exe'), (Join-Path $From 'credstored.exe') $InstallDir -Force
+    $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    if (($machinePath -split ';') -notcontains $InstallDir) {
+        [Environment]::SetEnvironmentVariable('Path', "$machinePath;$InstallDir", 'Machine')
+    }
 }
 
 Say "groups"
@@ -88,11 +101,19 @@ foreach ($g in $Groups) {
     if (-not (Get-LocalGroup -Name $g -ErrorAction SilentlyContinue)) {
         New-LocalGroup -Name $g -Description "credstore: $g" | Out-Null
     }
+    if (-not $User) { continue }
     try {
+        # A bare name (the MSI passes LogonUser) resolves to a local, then domain account.
         Add-LocalGroupMember -Group $g -Member $User
     } catch [Microsoft.PowerShell.Commands.MemberExistsException] {
         # already a member
     }
+}
+if (-not $User) { Write-Host '    no user given: add yourself with install.ps1 -Package -User NAME' }
+
+if ($EncryptPageFile -eq '1') {
+    Say 'page file encryption (applies after a restart)'
+    Invoke-Native fsutil.exe @('behavior', 'set', 'encryptpagingfile', '1')
 }
 
 Say "service ($Account)"
@@ -143,14 +164,9 @@ credstore is installed and running as $Account.
 
 Next, as $User (in a new, non-elevated terminal):
   1. Sign out and back in so the credstore-agents and credstore-approvers groups apply.
-  2. credstore init          set the vault passphrase
+  2. credstore setup         create the vault and connect Claude Code (asks first)
   3. credstore set NAME      add a secret (the value is prompted for)
   4. credstore doctor        check the install
-  5. Register the MCP server with Claude Code:
-       claude mcp add credstore -- credstore mcp
-     Do not add credstore's tools to Claude Code's allow list, so Claude Code asks too.
-  6. Add Claude Code deny rules for reading .env*, $DataDir and
-     $env:USERPROFILE\.credstore (see README).
 
 Approved commands run as ${Account}: give it access to the project folders it should
 run in, for example:

@@ -518,6 +518,67 @@ vault, index and policy unreadable by the test user, the service running, both g
 active, the memory closed (or not checkable on macOS), and a sandbox and hardening report
 from the daemon.
 
+## Packages and `credstore setup` (M8)
+
+The roadmap is in [ROADMAP.md](ROADMAP.md).
+
+**One install path.** Every package runs the same `deploy/install.ps1` / `install.sh`
+that installs from source, with `-Package` / `--package`: the package manager already
+put the binaries in place and owns them (and, for the MSI, the PATH entry), so the
+script skips copying them and, on uninstall, skips deleting them. A bug fixed in the
+script is fixed for every format.
+
+| Format | Built with | Files | Runs the script from |
+| --- | --- | --- | --- |
+| `.msi` | WiX 5 (`packaging/wix/credstore.wxs`) | `%ProgramFiles%\credstore` | deferred custom action as SYSTEM (`WixQuietExec`, output in the MSI log); a rollback action uninstalls the service if a later step fails |
+| `.deb`, `.rpm` | nfpm (`packaging/nfpm.yaml`) | `/usr/bin`, `/usr/lib/credstore` | `postinst` / `%post`; `prerm` / `%preun` on removal only, not upgrade |
+| `.pkg` | `pkgbuild` (`packaging/macos/build-pkg.sh`) | `/usr/local/bin`, `/usr/local/share/credstore` | `postinstall` |
+
+- **Which user is added to the groups.** MSI: `CREDSTOREUSER`, defaulting to
+  `LogonUser` (the account that started the install, also when UAC elevated it).
+  deb/rpm: `SUDO_USER`. pkg: the console user. If there is none (root, or a headless
+  install) the script says how to add one later instead of failing.
+- **Linux unit path.** The unit names `/usr/local/bin/credstored`; `install.sh --bin`
+  rewrites it, so the packages run `/usr/bin/credstored`.
+- **Page file encryption** (Windows): the MSI runs `fsutil behavior set
+  encryptpagingfile 1` unless `ENCRYPTPAGEFILE=0`. This changes a system setting at
+  install time; it is on by default because the daemon cannot `VirtualLock` its secrets
+  (see M7). `doctor` now warns while it is off.
+- **Removal keeps data.** Uninstalling any package keeps the vault, policy, audit log,
+  service user and groups, as `-Uninstall` always did.
+- **No macOS uninstaller.** A component `.pkg` cannot remove itself; `sudo
+  /usr/local/share/credstore/install.sh --uninstall` removes the service and binaries
+  and forgets the package receipt.
+- **Unsigned.** Signing needs an Apple Developer ID Installer certificate and a Windows
+  code-signing certificate, which the project does not have yet. `build-pkg.sh` signs if
+  `SIGN_IDENTITY` is set; the MSI is unsigned.
+
+**Releases.** CI's `packages` job builds and tests the packages on every push. A tag
+`vX.Y.Z` also runs the `release` job, which attaches all packages and a `SHA256SUMS`
+file to a **draft** GitHub release; a human publishes it.
+
+**`credstore setup`** is the part the installer cannot do, because it runs as the system
+and the vault passphrase and Claude Code settings belong to the human. It:
+
+1. checks the daemon answers on the agent endpoint (and, if not, says to sign out and
+   back in, the usual cause right after installing);
+2. creates the vault if the daemon lists no secrets (if one already exists the daemon
+   says so and nothing changes);
+3. registers credstore with Claude Code at **user scope** through `claude mcp add
+   --scope user` (the supported way; it does not edit `~/.claude.json` itself), unless
+   `~/.claude.json` already has a user-scope `credstore` server;
+4. adds the missing deny rules to `~/.claude/settings.json` (`.env*`, `~/.credstore`,
+   and the OS's vault and policy directories), keeping every other setting. The old file
+   is kept as `settings.json.before-credstore`. `serde_json` sorts keys when it writes,
+   so the file's key order may change; its content does not.
+
+It asks before steps 2 to 4, or takes `--yes`; without a terminal and without `--yes` it
+refuses. `--no-claude` skips steps 3 and 4. **Tested** by
+`crates/credstore/tests/setup_dev.rs` (dev daemon, throwaway home: vault created, deny
+rules merged into existing settings, second run changes nothing, no terminal refuses)
+and unit tests for the settings merge. Running `claude mcp add` itself is not tested in
+CI (no Claude Code there).
+
 ## Stubbed per OS
 
 | Capability      | Linux                 | macOS                 | Windows               |
@@ -533,6 +594,7 @@ from the daemon.
 | Runner          | done (session + killpg) | done (session + killpg), CI only | done (suspended start + Job Object) |
 | Sandbox         | done (bwrap, Landlock) | done (Seatbelt), CI only | Job Object only (no file hiding, no network deny) |
 | Service install | systemd unit + `install.sh` (CI) | launchd + `install.sh` (CI) | SCM service + `install.ps1` (CI) |
+| Package         | `.deb` (CI install), `.rpm` (built, inspected) | `.pkg`, unsigned (CI install) | `.msi`, unsigned (CI install) |
 | `doctor`        | done                  | done (no memory probe) | done                  |
 
 Stubs return `OsError::Unavailable("<mechanism> not built yet (Mx)")`; the daemon logs
@@ -574,3 +636,10 @@ only), installs with `-User` set to it, and starts the test as that user with
 `Start-Process -Credential`. Commands approved there run in `/opt/credstore-smoke`
 (Linux; `ProtectHome` hides the checkout), `/usr/local/credstore-smoke` (macOS) or
 `C:\credstore-smoke` (Windows, with an ACL for the service).
+
+The `packages` job (one per OS, M8) builds the `.msi`, `.deb`/`.rpm` or `.pkg`,
+installs it the way a user would (`msiexec /i /qn`, `apt-get install ./x.deb`,
+`installer -pkg`), checks the service, PATH and group membership, runs the same smoke
+test plus `credstore doctor`, then removes the package and checks the service and
+binaries are gone and the vault is kept. The `.rpm` is only inspected (file list and
+scripts), since the runner is Ubuntu.

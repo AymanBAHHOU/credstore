@@ -1,0 +1,33 @@
+<#
+.SYNOPSIS
+Build the Windows installer (dist\credstore-VERSION-x64.msi) from release binaries.
+
+.DESCRIPTION
+Needs the .NET SDK. Installs WiX 5 as a .NET global tool if it is missing. Run after
+`cargo build --release -p credstore -p credstored`.
+#>
+param(
+    [string]$BinDir = (Join-Path $PSScriptRoot '..\target\release'),
+    [string]$OutDir = (Join-Path $PSScriptRoot '..\dist')
+)
+$ErrorActionPreference = 'Stop'
+$WixVersion = '5.0.2'
+
+$root = Resolve-Path (Join-Path $PSScriptRoot '..')
+$version = (Select-String -Path (Join-Path $root 'Cargo.toml') -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+
+if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
+    dotnet tool install --global wix --version $WixVersion
+    if ($LASTEXITCODE -ne 0) { throw 'installing WiX failed' }
+    $env:PATH += ";$env:USERPROFILE\.dotnet\tools"
+}
+wix extension add --global "WixToolset.Util.wixext/$WixVersion"
+if ($LASTEXITCODE -ne 0) { throw 'adding the WiX util extension failed' }
+
+New-Item -ItemType Directory -Force $OutDir | Out-Null
+$msi = Join-Path $OutDir "credstore-$version-x64.msi"
+wix build -arch x64 -ext WixToolset.Util.wixext `
+    -d "Version=$version" -d "BinDir=$BinDir" -d "DeployDir=$(Join-Path $root 'deploy')" `
+    -o $msi (Join-Path $PSScriptRoot 'wix\credstore.wxs')
+if ($LASTEXITCODE -ne 0) { throw 'wix build failed' }
+Write-Host "built $msi"

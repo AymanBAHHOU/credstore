@@ -8,6 +8,9 @@
 #   --from DIR   directory with the credstore and credstored binaries
 #                (default: target/release in the repository)
 #   --user NAME  the human who approves requests and runs the agent (default: $SUDO_USER)
+#   --bin DIR    where the binaries live (default: /usr/local/bin)
+#   --package    called by a .deb/.rpm/.pkg: the binaries are already in --bin, the
+#                package manager owns them, and a missing --user is not an error
 #
 # Safe to re-run: existing users, groups, vault, policy and audit log are kept.
 set -euo pipefail
@@ -16,6 +19,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 from="$here/../target/release"
 human="${SUDO_USER:-}"
 uninstall=0
+package=0
 bin=/usr/local/bin
 
 die() {
@@ -34,12 +38,20 @@ while [ $# -gt 0 ]; do
         human="$2"
         shift 2
         ;;
+    --bin)
+        bin="$2"
+        shift 2
+        ;;
+    --package)
+        package=1
+        shift
+        ;;
     --uninstall)
         uninstall=1
         shift
         ;;
     -h | --help)
-        sed -n '2,13p' "$0"
+        sed -n '2,16p' "$0"
         exit 0
         ;;
     *) die "unknown option: $1" ;;
@@ -94,7 +106,12 @@ if [ "$uninstall" = 1 ]; then
             rm -f "/Library/LaunchDaemons/$label.plist"
         done
     fi
-    rm -f "$bin/credstore" "$bin/credstored"
+    if [ "$package" = 0 ]; then
+        rm -f "$bin/credstore" "$bin/credstored"
+    fi
+    if [ "$os" = Darwin ]; then
+        pkgutil --forget dev.credstore >/dev/null 2>&1 || true
+    fi
     say "removed the service and the binaries"
     echo "Kept (delete by hand if you want them gone): $data_dir (vault), /etc/credstore"
     echo "(policy), $log_dir (audit log), the $svc_user user and the credstore-agents and"
@@ -104,16 +121,30 @@ fi
 
 # -------------------------------- install ---------------------------------
 
-[ -n "$human" ] || die "--user NAME is required when not run through sudo"
-[ "$human" != root ] || die "--user should be your normal account, not root"
-id "$human" >/dev/null 2>&1 || die "no user $human"
-for b in credstore credstored; do
-    [ -x "$from/$b" ] || die "missing $from/$b (build with: cargo build --release)"
-done
+if [ "$human" = root ]; then
+    human=""
+    [ "$package" = 1 ] || die "--user should be your normal account, not root"
+fi
+if [ -z "$human" ]; then
+    [ "$package" = 1 ] || die "--user NAME is required when not run through sudo"
+    echo "install.sh: no user to add to the credstore groups; later run:" >&2
+    echo "  sudo $here/install.sh --package --bin $bin --user NAME" >&2
+else
+    id "$human" >/dev/null 2>&1 || die "no user $human"
+fi
 
-say "binaries -> $bin"
-install -d -m 0755 "$bin"
-install -m 0755 "$from/credstore" "$from/credstored" "$bin/"
+if [ "$package" = 1 ]; then
+    for b in credstore credstored; do
+        [ -x "$bin/$b" ] || die "missing $bin/$b"
+    done
+else
+    for b in credstore credstored; do
+        [ -x "$from/$b" ] || die "missing $from/$b (build with: cargo build --release)"
+    done
+    say "binaries -> $bin"
+    install -d -m 0755 "$bin"
+    install -m 0755 "$from/credstore" "$from/credstored" "$bin/"
+fi
 
 if [ "$os" = Linux ]; then
     [ -d /run/systemd/system ] ||
@@ -123,7 +154,9 @@ if [ "$os" = Linux ]; then
     install -d -m 0755 /etc/sysusers.d
     install -m 0644 "$here/sysusers.conf" /etc/sysusers.d/credstore.conf
     systemd-sysusers /etc/sysusers.d/credstore.conf
-    usermod -aG credstore-agents,credstore-approvers "$human"
+    if [ -n "$human" ]; then
+        usermod -aG credstore-agents,credstore-approvers "$human"
+    fi
 else
     # First id in 300-499 that no user or group uses.
     free_id() {
@@ -161,7 +194,9 @@ else
     for g in credstore-agents credstore-approvers; do
         # The daemon is a member so it can give its sockets to the group.
         dseditgroup -o edit -a _credstore -t user "$g"
-        dseditgroup -o edit -a "$human" -t user "$g"
+        if [ -n "$human" ]; then
+            dseditgroup -o edit -a "$human" -t user "$g"
+        fi
     done
 
     say "directories"
@@ -181,7 +216,9 @@ fi
 
 say "service"
 if [ "$os" = Linux ]; then
-    install -m 0644 "$here/credstored.service" /etc/systemd/system/credstored.service
+    # The unit names /usr/local/bin; point it at --bin.
+    sed "s|/usr/local/bin/credstored|$bin/credstored|" "$here/credstored.service"         >/etc/systemd/system/credstored.service
+    chmod 0644 /etc/systemd/system/credstored.service
     systemctl daemon-reload
     systemctl enable credstored.service
     systemctl restart credstored.service
@@ -198,17 +235,12 @@ cat <<EOF
 
 credstore is installed and running as $svc_user.
 
-Next, as $human:
+Next, as ${human:-your normal user}:
   1. Log out and back in (or open a new login session) so the credstore-agents and
      credstore-approvers groups apply.
-  2. credstore init          set the vault passphrase
+  2. credstore setup         create the vault and connect Claude Code (asks first)
   3. credstore set NAME      add a secret (the value is prompted for)
   4. credstore doctor        check the install
-  5. Register the MCP server with Claude Code:
-       claude mcp add credstore -- credstore mcp
-     Do not add credstore's tools to Claude Code's allow list, so Claude Code asks too.
-  6. Add Claude Code deny rules for reading .env*, $data_dir, /etc/credstore and
-     ~/.credstore (see README).
 
 Approved commands run as $svc_user: give it access to the project folders it should
 run in (see README, "Installed mode").

@@ -29,6 +29,15 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// After installing: create the vault and connect Claude Code (asks before each change).
+    Setup {
+        /// Make every change without asking.
+        #[arg(long)]
+        yes: bool,
+        /// Leave Claude Code alone.
+        #[arg(long)]
+        no_claude: bool,
+    },
     /// Create the vault and index, and set the passphrase.
     Init,
     /// Add or replace a secret. The value is prompted for, never taken from argv.
@@ -115,6 +124,15 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
             argv,
         } => {
             return commands::run(&client, secrets, reason, argv, &prompt, &mut out, &mut msg).await
+        }
+        Command::Setup { yes, no_claude } => {
+            let claude = if no_claude {
+                None
+            } else {
+                credstore::setup::ClaudeCode::detect()
+            };
+            let opts = credstore::setup::Options { yes, dev: cli.dev };
+            credstore::setup::setup(&client, &prompt, &opts, claude.as_ref(), &mut msg).await
         }
         Command::Init => commands::init(&client, &prompt, &mut msg).await,
         Command::Set { name, description } => {

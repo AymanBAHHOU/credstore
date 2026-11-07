@@ -25,7 +25,32 @@ The full design is in [SPEC.md](SPEC.md); where the code differs from it, and wh
 
 ## Install
 
-Build first (Rust stable):
+**From a release** (Releases page of this repository):
+
+| OS | Package | Install |
+| --- | --- | --- |
+| Windows | `credstore-VERSION-x64.msi` | double-click, or `msiexec /i credstore-VERSION-x64.msi` |
+| macOS | `credstore-VERSION.pkg` | double-click, or `sudo installer -pkg credstore-VERSION.pkg -target /` |
+| Debian, Ubuntu, WSL2 | `credstore_VERSION_amd64.deb` | `sudo apt install ./credstore_VERSION_amd64.deb` |
+| Fedora, RHEL | `credstore-VERSION.x86_64.rpm` | `sudo dnf install ./credstore-VERSION.x86_64.rpm` |
+
+The package installs the service and adds the user who installed it to the credstore
+groups. Then **sign out and back in** (the groups apply at logon) and run:
+
+```bash
+credstore setup
+```
+
+It creates the vault (you choose the passphrase) and, if you agree, registers credstore
+with Claude Code for all folders and adds Claude Code deny rules for `.env` files and
+credstore's own files. On Windows a Start menu entry, "credstore setup", runs the same
+thing.
+
+Builds are not code-signed yet, so Windows SmartScreen and macOS Gatekeeper warn before
+installing (on macOS: right-click the package, then Open). The MSI also turns on page
+file encryption (applies after a restart); pass `ENCRYPTPAGEFILE=0` to leave it alone.
+
+**From source** (Rust stable):
 
 ```bash
 cargo build --release

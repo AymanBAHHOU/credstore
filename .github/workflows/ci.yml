@@ -134,3 +134,155 @@ jobs:
         run: |
           .\deploy\install.ps1 -Uninstall
           if (Get-Service credstore -ErrorAction SilentlyContinue) { throw 'service still there' }
+
+  # M8: build the real packages, install them like a user would (apt, installer, msiexec),
+  # run the M7 smoke test against the packaged service, then remove the package.
+  packages:
+    name: package-${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: packages
+      - uses: actions/setup-go@v5
+        if: runner.os == 'Linux'
+        with:
+          go-version: stable
+      - name: Build binaries and the smoke test
+        shell: bash
+        run: |
+          cargo build --release -p credstore -p credstored
+          cargo build -p credstore-tests --bin credstore-adversary
+          cargo test -p credstore-tests --test m7_installed --no-run --message-format=json \
+            | jq -r 'select(.profile.test == true and .target.name == "m7_installed") | .executable' \
+            > smoke-test-path.txt
+
+      - name: Build .deb and .rpm (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.41.1
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          bash packaging/build-linux.sh
+      - name: Install the .deb and smoke test (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo apt-get install -y ./dist/credstore_*.deb
+          systemctl is-active credstored.service
+          test "$(command -v credstore)" = /usr/bin/credstore
+          id -nG "$USER" | grep -qw credstore-agents
+          sudo install -d -m 0755 /opt/credstore-smoke
+          sudo install -m 0755 target/debug/credstore-adversary /opt/credstore-smoke/
+          sudo -u "$USER" env CREDSTORE_SMOKE_DIR=/opt/credstore-smoke "$(cat smoke-test-path.txt)" --ignored --nocapture
+          sudo -u "$USER" credstore doctor </dev/null
+      - name: Remove the .deb (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get remove -y credstore
+          ! systemctl is-active credstored.service
+          ! test -e /usr/bin/credstored
+          sudo test -d /var/lib/credstore   # the vault is kept
+      - name: Check the .rpm (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y rpm
+          rpm -qpl dist/credstore-*.rpm | tee rpm-files.txt
+          grep -qx /usr/bin/credstored rpm-files.txt
+          rpm -qp --scripts dist/credstore-*.rpm | grep -q 'install.sh --package'
+
+      - name: Build and install the .pkg, smoke test (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          bash packaging/macos/build-pkg.sh
+          sudo installer -pkg dist/credstore-*.pkg -target /
+          test -x /usr/local/bin/credstored
+          sudo launchctl print system/dev.credstore.daemon >/dev/null
+          # The console user may not be the runner user; make sure it is in the groups.
+          sudo /usr/local/share/credstore/install.sh --package --bin /usr/local/bin --user "$USER"
+          sudo install -d -m 0755 /usr/local/credstore-smoke
+          sudo install -m 0755 target/debug/credstore-adversary /usr/local/credstore-smoke/
+          sudo -u "$USER" env CREDSTORE_SMOKE_DIR=/usr/local/credstore-smoke "$(cat smoke-test-path.txt)" --ignored --nocapture
+          sudo -u "$USER" credstore doctor </dev/null
+          sudo /usr/local/share/credstore/install.sh --uninstall
+          ! test -e /usr/local/bin/credstored
+
+      - name: Build the .msi (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: .\packaging\build-msi.ps1
+      - name: Install the .msi and smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $pw = ConvertTo-SecureString ("Cs1!" + [guid]::NewGuid().ToString('N')) -AsPlainText -Force
+          New-LocalUser -Name cssmoke -Password $pw -PasswordNeverExpires | Out-Null
+          $msi = (Get-ChildItem dist\credstore-*.msi).FullName
+          $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/l*v', 'msi-install.log', "CREDSTOREUSER=$env:COMPUTERNAME\cssmoke" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content msi-install.log -Tail 80; throw "msiexec /i failed ($($p.ExitCode))" }
+          if ((Get-Service credstore).Status -ne 'Running') { throw 'service not running' }
+          if (-not (Test-Path "$env:ProgramFiles\credstore\credstore.exe")) { throw 'binaries missing' }
+          $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';'
+          if (-not ($machinePath | Where-Object { $_.TrimEnd('\') -eq "$env:ProgramFiles\credstore" })) { throw 'PATH entry missing' }
+          $smoke = 'C:\credstore-smoke'
+          New-Item -ItemType Directory -Force $smoke | Out-Null
+          Copy-Item target\debug\credstore-adversary.exe, (Get-Content smoke-test-path.txt) $smoke
+          icacls $smoke /grant 'NT SERVICE\credstore:(OI)(CI)RX' /grant 'cssmoke:(OI)(CI)M' | Out-Null
+          $test = Join-Path $smoke (Split-Path -Leaf (Get-Content smoke-test-path.txt))
+          Start-Service seclogon -ErrorAction SilentlyContinue
+          $cred = New-Object System.Management.Automation.PSCredential("$env:COMPUTERNAME\cssmoke", $pw)
+          $p = Start-Process -FilePath $test -ArgumentList '--ignored', '--nocapture' `
+            -Credential $cred -LoadUserProfile -WorkingDirectory $smoke -Wait -PassThru `
+            -RedirectStandardOutput "$smoke\out.txt" -RedirectStandardError "$smoke\err.txt"
+          Get-Content "$smoke\out.txt", "$smoke\err.txt"
+          if ($p.ExitCode -ne 0) { throw "smoke test failed ($($p.ExitCode))" }
+      - name: MSI and service logs (Windows)
+        if: failure() && runner.os == 'Windows'
+        shell: powershell
+        run: |
+          Get-Content msi-install.log -ErrorAction SilentlyContinue | Select-String -Pattern 'WixQuietExec|install.ps1|==>|error|Return value 3' -Context 0,2
+          Get-Content "$env:ProgramData\credstore\credstored.log" -ErrorAction SilentlyContinue
+      - name: Remove the .msi (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $msi = (Get-ChildItem dist\credstore-*.msi).FullName
+          $p = Start-Process msiexec.exe -ArgumentList '/x', "`"$msi`"", '/qn', '/l*v', 'msi-remove.log' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content msi-remove.log -Tail 80; throw "msiexec /x failed ($($p.ExitCode))" }
+          if (Get-Service credstore -ErrorAction SilentlyContinue) { throw 'service still there' }
+          if (Test-Path "$env:ProgramFiles\credstore\credstored.exe") { throw 'binaries still there' }
+          if (-not (Test-Path "$env:ProgramData\credstore")) { throw 'the vault directory was removed' }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.os }}
+          path: dist/*
+          if-no-files-found: error
+
+  # A tag vX.Y.Z publishes the packages as a draft release; a human reviews and
+  # publishes it.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, installed, packages]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && sha256sum * > SHA256SUMS)
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --draft --title "credstore $GITHUB_REF_NAME" --generate-notes

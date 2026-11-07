@@ -171,6 +171,15 @@ pub async fn doctor(
     file_checks(&mut d, client, mode, &user, privileged);
     let daemon_pid = endpoint_checks(&mut d, client).await;
     memory_check(&mut d, mode, &user, privileged, daemon_pid);
+    match probe::page_file_encrypted() {
+        Some(true) => d.check(Level::Ok, "page file", "encrypted"),
+        Some(false) => d.check(
+            Level::Warn,
+            "page file",
+            "not encrypted: secrets paged out of memory can stay on disk. Fix (elevated, then restart): fsutil behavior set encryptpagingfile 1",
+        ),
+        None => {}
+    }
     daemon_status(&mut d, client, p).await;
     claude_code_checks(&mut d);
 

@@ -30,6 +30,21 @@ pub trait Prompt {
 }
 
 pub async fn init(client: &Client, p: &dyn Prompt, msg: &mut dyn Write) -> anyhow::Result<()> {
+    if !create_vault(client, p).await? {
+        bail!("a vault already exists");
+    }
+    writeln!(msg, "Created the vault.")?;
+    writeln!(
+        msg,
+        "There is no way to recover the vault without this passphrase."
+    )?;
+    writeln!(msg, "{MCP_HINT}")?;
+    Ok(())
+}
+
+/// Ask for a new passphrase (twice) and create the vault. `Ok(false)` if a vault
+/// already exists.
+pub async fn create_vault(client: &Client, p: &dyn Prompt) -> anyhow::Result<bool> {
     let first = p.secret("New vault passphrase: ")?;
     if first.expose().chars().count() < MIN_PASSPHRASE_LEN {
         bail!("the passphrase must be at least {MIN_PASSPHRASE_LEN} characters");
@@ -38,14 +53,11 @@ pub async fn init(client: &Client, p: &dyn Prompt, msg: &mut dyn Write) -> anyho
     if first != second {
         bail!("the passphrases do not match");
     }
-    expect_ok(client.approver(ApproverOp::AdminInit, first).await?)?;
-    writeln!(msg, "Created the vault.")?;
-    writeln!(
-        msg,
-        "There is no way to recover the vault without this passphrase."
-    )?;
-    writeln!(msg, "{MCP_HINT}")?;
-    Ok(())
+    match client.approver(ApproverOp::AdminInit, first).await? {
+        Response::Ok => Ok(true),
+        Response::Error { message, .. } if message.contains("already exists") => Ok(false),
+        other => Err(crate::client::response_error(other)),
+    }
 }
 
 /// How to connect an agent, printed by `init` and the installers.

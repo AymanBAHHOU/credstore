@@ -1,0 +1,55 @@
+# credstore Linux packages (.deb, .rpm), built by packaging/build-linux.sh with nfpm.
+# nfpm expands ${VERSION} and ${ARCH} from the environment.
+#
+# The package owns the binaries in /usr/bin and the deploy files in /usr/lib/credstore.
+# Its scripts run /usr/lib/credstore/install.sh --package, the same script that installs
+# from source, to create the users, groups, directories, policy and systemd unit.
+name: credstore
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: admin
+priority: optional
+maintainer: credstore maintainers <credstore@users.noreply.github.com>
+description: |
+  Local secret broker that lets coding agents use secrets without seeing them.
+  A daemon running as its own user holds the encrypted vault, asks a human to approve
+  each request, runs the command sandboxed and returns redacted output.
+vendor: credstore
+homepage: https://github.com/AymanBAHHOU/credstore
+license: MIT OR Apache-2.0
+
+depends:
+  - systemd
+recommends:
+  - bubblewrap
+
+contents:
+  - src: target/release/credstore
+    dst: /usr/bin/credstore
+    file_info:
+      mode: 0755
+  - src: target/release/credstored
+    dst: /usr/bin/credstored
+    file_info:
+      mode: 0755
+  - src: deploy/install.sh
+    dst: /usr/lib/credstore/install.sh
+    file_info:
+      mode: 0755
+  - src: deploy/credstored.service
+    dst: /usr/lib/credstore/credstored.service
+    file_info:
+      mode: 0644
+  - src: deploy/sysusers.conf
+    dst: /usr/lib/credstore/sysusers.conf
+    file_info:
+      mode: 0644
+  - src: deploy/policy.toml
+    dst: /usr/lib/credstore/policy.toml
+    file_info:
+      mode: 0644
+
+scripts:
+  postinstall: packaging/linux/postinstall.sh
+  preremove: packaging/linux/preremove.sh

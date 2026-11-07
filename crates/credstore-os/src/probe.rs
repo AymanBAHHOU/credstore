@@ -35,6 +35,32 @@ pub fn is_privileged() -> bool {
     privileged() || elevated_admin()
 }
 
+/// Whether Windows encrypts its page file (`fsutil behavior query encryptpagingfile`).
+/// Secrets the daemon holds can be paged out; this keeps them unreadable on disk after
+/// shutdown. `None` where the question does not apply or the query failed.
+pub fn page_file_encrypted() -> Option<bool> {
+    #[cfg(windows)]
+    {
+        let fsutil = std::env::var_os("SystemRoot")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| r"C:\Windows".into())
+            .join("System32")
+            .join("fsutil.exe");
+        let out = std::process::Command::new(fsutil)
+            .args(["behavior", "query", "encryptpagingfile"])
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        let line = text.lines().find(|l| l.contains("EncryptPagingFile"))?;
+        let value = line.split('=').nth(1)?.trim();
+        Some(value.starts_with('1'))
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
 #[cfg(unix)]
 fn elevated_admin() -> bool {
     false
