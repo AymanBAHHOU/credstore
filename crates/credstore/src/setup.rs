@@ -116,35 +116,82 @@ pub async fn setup(
     Ok(())
 }
 
+/// Where Claude Code stands for this user (shown by the desktop app).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ClaudeState {
+    /// `claude` is on PATH.
+    pub found: bool,
+    /// credstore is registered at user scope.
+    pub registered: bool,
+    /// Deny rules that are not in `~/.claude/settings.json` yet.
+    pub missing_rules: Vec<String>,
+    pub settings_file: String,
+}
+
+impl ClaudeCode {
+    pub fn state(&self) -> Result<ClaudeState> {
+        let settings = read_json(&self.settings())?;
+        Ok(ClaudeState {
+            found: self.exe.is_some(),
+            registered: user_scope_registered(&self.home),
+            missing_rules: deny_rules()
+                .into_iter()
+                .filter(|r| !has_deny_rule(&settings, r))
+                .collect(),
+            settings_file: self.settings().display().to_string(),
+        })
+    }
+
+    /// `claude mcp add --scope user credstore -- <credstore> [--dev] mcp`.
+    pub fn register(&self, dev: bool) -> Result<()> {
+        let exe = self.exe.as_ref().context("`claude` is not on PATH")?;
+        let mut cmd = Command::new(exe);
+        cmd.args(["mcp", "add", "--scope", "user", "credstore", "--"])
+            .arg(&self.credstore);
+        if dev {
+            cmd.arg("--dev");
+        }
+        cmd.arg("mcp");
+        let out = cmd
+            .output()
+            .with_context(|| format!("running {}", exe.display()))?;
+        if !out.status.success() {
+            bail!(
+                "claude mcp add failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(())
+    }
+
+    /// Add the missing deny rules to `~/.claude/settings.json`, keeping the old file as
+    /// a backup. Returns the rules added.
+    pub fn add_deny_rules(&self) -> Result<Vec<String>> {
+        let path = self.settings();
+        let mut settings = read_json(&path)?;
+        let added = add_deny_rules(&mut settings, &deny_rules())?;
+        if !added.is_empty() {
+            write_json(&path, &settings)?;
+        }
+        Ok(added)
+    }
+}
+
 fn claude_code(c: &ClaudeCode, p: &dyn Prompt, opts: &Options, msg: &mut dyn Write) -> Result<()> {
+    let state = c.state()?;
     // Registration, at user scope so every folder sees it.
-    if user_scope_registered(&c.home) {
+    if state.registered {
         writeln!(
             msg,
             "ok    Claude Code: credstore is registered for all folders"
         )?;
-    } else if let Some(exe) = &c.exe {
+    } else if state.found {
         if confirm(
             p,
             opts.yes,
             "Register credstore with Claude Code for all folders (claude mcp add --scope user)?",
         )? {
-            let mut cmd = Command::new(exe);
-            cmd.args(["mcp", "add", "--scope", "user", "credstore", "--"])
-                .arg(&c.credstore);
-            if opts.dev {
-                cmd.arg("--dev");
-            }
-            cmd.arg("mcp");
-            let out = cmd
-                .output()
-                .with_context(|| format!("running {}", exe.display()))?;
-            if !out.status.success() {
-                bail!(
-                    "claude mcp add failed: {}",
-                    String::from_utf8_lossy(&out.stderr).trim()
-                );
-            }
+            c.register(opts.dev)?;
             writeln!(
                 msg,
                 "done  Claude Code: registered credstore for all folders"
@@ -160,33 +207,29 @@ fn claude_code(c: &ClaudeCode, p: &dyn Prompt, opts: &Options, msg: &mut dyn Wri
     }
 
     // Deny rules in ~/.claude/settings.json.
-    let path = c.settings();
-    let mut settings = read_json(&path)?;
-    let wanted = deny_rules();
-    let missing: Vec<&String> = wanted
-        .iter()
-        .filter(|r| !has_deny_rule(&settings, r))
-        .collect();
-    if missing.is_empty() {
+    if state.missing_rules.is_empty() {
         writeln!(msg, "ok    Claude Code: deny rules are in place")?;
         return Ok(());
     }
     writeln!(msg, "      These Claude Code deny rules stop the agent reading .env files and credstore's files:")?;
-    for r in &missing {
+    for r in &state.missing_rules {
         writeln!(msg, "        {r}")?;
     }
-    if !confirm(p, opts.yes, &format!("Add them to {}?", path.display()))? {
+    if !confirm(
+        p,
+        opts.yes,
+        &format!("Add them to {}?", state.settings_file),
+    )? {
         writeln!(msg, "skip  Claude Code deny rules")?;
         return Ok(());
     }
-    let added = add_deny_rules(&mut settings, &wanted)?;
-    write_json(&path, &settings)?;
+    let added = c.add_deny_rules()?;
     writeln!(
         msg,
         "done  Claude Code: added {} deny rule(s) to {} (the old file is kept as {})",
         added.len(),
-        path.display(),
-        backup_path(&path).display()
+        state.settings_file,
+        backup_path(&c.settings()).display()
     )?;
     Ok(())
 }

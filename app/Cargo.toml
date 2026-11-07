@@ -1,0 +1,37 @@
+[package]
+name = "credstore-app"
+description = "credstore desktop app: setup, approvals, secrets, folders, health"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Its own workspace, so the main workspace's build and CI do not need a webview toolkit.
+[workspace]
+
+[[bin]]
+name = "credstore-app"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[dependencies]
+anyhow = "1"
+credstore = { path = "../crates/credstore" }
+credstore-os = { path = "../crates/credstore-os" }
+credstore-proto = { path = "../crates/credstore-proto" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2.12", features = ["tray-icon", "image-png"] }
+tauri-plugin-dialog = "2.8"
+tauri-plugin-notification = "2.8"
+tokio = { version = "1", features = ["rt"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true
+
+[lints.rust]
+unsafe_code = "forbid"

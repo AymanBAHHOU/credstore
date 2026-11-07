@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=credstore
+Comment=Approve requests and manage credstore secrets
+Exec=credstore-app
+Icon=credstore-app
+Terminal=false
+Categories=Utility;Security;

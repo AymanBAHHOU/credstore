@@ -1,0 +1,46 @@
+# credstore desktop app (M10) Linux packages, built by packaging/build-linux.sh when
+# app/target/release/credstore-app exists. A separate package so the core credstore
+# package does not pull in a webview toolkit.
+name: credstore-app
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: admin
+priority: optional
+maintainer: credstore maintainers <credstore@users.noreply.github.com>
+description: |
+  Desktop app for credstore: approve requests, manage secrets, grant folders,
+  connect Claude Code and check health.
+vendor: credstore
+homepage: https://github.com/AymanBAHHOU/credstore
+license: MIT OR Apache-2.0
+
+depends:
+  - credstore
+overrides:
+  deb:
+    depends:
+      - credstore
+      - libwebkit2gtk-4.1-0
+      - libgtk-3-0
+      - libayatana-appindicator3-1
+  rpm:
+    depends:
+      - credstore
+      - webkit2gtk4.1
+      - gtk3
+      - libayatana-appindicator-gtk3
+
+contents:
+  - src: app/target/release/credstore-app
+    dst: /usr/bin/credstore-app
+    file_info:
+      mode: 0755
+  - src: packaging/linux/credstore-app.desktop
+    dst: /usr/share/applications/credstore-app.desktop
+    file_info:
+      mode: 0644
+  - src: app/icons/128x128.png
+    dst: /usr/share/icons/hicolor/128x128/apps/credstore-app.png
+    file_info:
+      mode: 0644

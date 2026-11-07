@@ -46,6 +46,13 @@ with Claude Code for all folders and adds Claude Code deny rules for `.env` file
 credstore's own files. On Windows a Start menu entry, "credstore setup", runs the same
 thing.
 
+**Desktop app.** The Windows and macOS packages also install the credstore app (Start
+menu "credstore", or `/Applications/credstore.app`); on Linux install
+`credstore-app_VERSION_amd64.deb` (or the `.rpm`) too. It does the same as the commands
+below without a terminal: approve requests (with a notification when one arrives), add
+and remove secrets, grant folders, connect Claude Code and run the health check.
+Closing the window keeps it in the tray. Every approval still needs the passphrase.
+
 Builds are not code-signed yet, so Windows SmartScreen and macOS Gatekeeper warn before
 installing (on macOS: right-click the package, then Open). The MSI also turns on page
 file encryption (applies after a restart); pass `ENCRYPTPAGEFILE=0` to leave it alone.

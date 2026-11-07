@@ -5,3 +5,5 @@ index.json
 audit.jsonl
 .env*
 /dist
+/app/target
+/app/gen

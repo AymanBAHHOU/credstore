@@ -334,7 +334,7 @@ pub fn audit_verify(path: &Path, out: &mut dyn Write) -> anyhow::Result<()> {
     }
 }
 
-pub(crate) fn printable(s: &str) -> String {
+pub fn printable(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_control() { '?' } else { c })
         .collect()

@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>credstore</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <img src="icon.png" alt="" width="28" height="28">
+      <span>credstore</span>
+    </div>
+    <div id="status" class="pill">connecting…</div>
+  </header>
+
+  <nav id="tabs">
+    <button data-tab="approvals" class="active">Approvals <span id="pending-count" class="count" hidden></span></button>
+    <button data-tab="secrets">Secrets</button>
+    <button data-tab="folders">Folders</button>
+    <button data-tab="claude">Claude Code</button>
+    <button data-tab="health">Health</button>
+  </nav>
+
+  <main>
+    <section id="unreachable" class="card warn" hidden>
+      <h2>credstore's service is not answering</h2>
+      <p id="unreachable-detail"></p>
+      <button id="retry">Try again</button>
+    </section>
+
+    <section id="tab-approvals" class="tab">
+      <div id="watch-start" class="card">
+        <h2>Receive approval requests</h2>
+        <p>Agents' requests to use your secrets appear here. Enter your vault passphrase to
+          start receiving them. You will still confirm each decision with the passphrase.</p>
+        <form id="watch-form" class="row">
+          <input id="watch-pass" type="password" autocomplete="off" placeholder="Vault passphrase" required>
+          <button type="submit">Start</button>
+        </form>
+        <p id="watch-msg" class="msg"></p>
+      </div>
+      <div id="watch-on" hidden>
+        <p class="muted" id="watch-state">Waiting for requests. Closing the window keeps credstore running in the tray.</p>
+        <div id="requests"></div>
+      </div>
+    </section>
+
+    <section id="tab-secrets" class="tab" hidden>
+      <div id="create-vault" class="card" hidden>
+        <h2>Create your vault</h2>
+        <p>Choose a passphrase of at least 12 characters. There is no way to recover the vault
+          without it. If you already have a vault, skip this.</p>
+        <form id="vault-form" class="stack">
+          <input id="vault-pass" type="password" autocomplete="new-password" placeholder="New passphrase" required>
+          <input id="vault-repeat" type="password" autocomplete="new-password" placeholder="Repeat the passphrase" required>
+          <button type="submit">Create vault</button>
+        </form>
+        <p id="vault-msg" class="msg"></p>
+      </div>
+
+      <div class="card">
+        <h2>Secrets</h2>
+        <table id="secrets-table">
+          <thead><tr><th>Name</th><th>Description</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <p id="no-secrets" class="muted" hidden>No secrets yet.</p>
+      </div>
+
+      <div class="card">
+        <h2>Add or replace a secret</h2>
+        <p class="muted">The value is sent to credstore's service and never shown again.</p>
+        <form id="secret-form" class="stack">
+          <input id="secret-name" placeholder="NAME (letters, digits, _)" required pattern="[A-Za-z_][A-Za-z0-9_]*">
+          <input id="secret-desc" placeholder="Description (what it is for; agents see this)">
+          <input id="secret-value" type="password" autocomplete="off" placeholder="Value" required>
+          <input id="secret-pass" type="password" autocomplete="off" placeholder="Vault passphrase" required>
+          <button type="submit">Save</button>
+        </form>
+        <p id="secret-msg" class="msg"></p>
+      </div>
+    </section>
+
+    <section id="tab-folders" class="tab" hidden>
+      <div class="card">
+        <h2>Project folders</h2>
+        <p>Approved commands run as credstore's service account, which needs access to the
+          folders they run in. You own your project folders, so no admin rights are needed.</p>
+        <button id="pick-folder">Choose a folder…</button>
+        <div id="grant-plan" hidden>
+          <p>credstore will run, as you:</p>
+          <pre id="grant-commands"></pre>
+          <button id="grant-go">Grant access</button>
+        </div>
+        <p id="grant-msg" class="msg"></p>
+      </div>
+    </section>
+
+    <section id="tab-claude" class="tab" hidden>
+      <div class="card">
+        <h2>Claude Code</h2>
+        <ul id="claude-state" class="checks"></ul>
+        <button id="claude-connect">Connect Claude Code</button>
+        <p class="muted">Registers credstore for all folders (<code>claude mcp add --scope user</code>)
+          and adds deny rules so the agent cannot read <code>.env</code> files or credstore's
+          files. Your other settings are kept, and the old settings file is backed up.
+          Do not allowlist credstore's tools, so Claude Code asks you too.</p>
+        <p id="claude-msg" class="msg"></p>
+      </div>
+    </section>
+
+    <section id="tab-health" class="tab" hidden>
+      <div class="card">
+        <h2>Health check</h2>
+        <p>Checks the service, your access, the file permissions, and what protects your
+          secrets on this machine. With the passphrase it also shows the service's sandbox and
+          hardening.</p>
+        <form id="doctor-form" class="row">
+          <input id="doctor-pass" type="password" autocomplete="off" placeholder="Vault passphrase (optional)">
+          <button type="submit">Run</button>
+        </form>
+        <p id="doctor-summary" class="msg"></p>
+        <ul id="doctor-checks" class="checks"></ul>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

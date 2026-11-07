@@ -166,6 +166,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: packages
+          workspaces: |
+            . -> target
+            app -> app/target
       - uses: actions/setup-go@v5
         if: runner.os == 'Linux'
         with:
@@ -178,6 +181,17 @@ jobs:
           cargo test -p credstore-tests --test m7_installed --no-run --message-format=json \
             | jq -r 'select(.profile.test == true and .target.name == "m7_installed") | .executable' \
             > smoke-test-path.txt
+      # M10: the desktop app goes into the packages too.
+      - name: Webview libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb
+      - name: Build the desktop app
+        shell: bash
+        run: |
+          cargo fmt --check --manifest-path app/Cargo.toml
+          cargo build --release --manifest-path app/Cargo.toml
 
       - name: Build .deb and .rpm (Linux)
         if: runner.os == 'Linux'
@@ -199,10 +213,17 @@ jobs:
           sudo install -m 0755 target/debug/credstore-adversary /opt/credstore-smoke/
           sudo -u "$USER" env CREDSTORE_SMOKE_DIR=/opt/credstore-smoke "$(cat smoke-test-path.txt)" --ignored --nocapture
           sudo -u "$USER" credstore doctor </dev/null
+      - name: Install the app .deb and smoke test it (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y ./dist/credstore-app_*.deb
+          test -f /usr/share/applications/credstore-app.desktop
+          sudo -u "$USER" env CREDSTORE_APP_SMOKE=1 xvfb-run -a credstore-app 2>&1 | tee app.txt
+          grep -q 'page ready: installed reachable=true' app.txt
       - name: Remove the .deb (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get remove -y credstore
+          sudo apt-get remove -y credstore-app credstore
           ! systemctl is-active credstored.service
           ! test -e /usr/bin/credstored
           sudo test -d /var/lib/credstore   # the vault is kept
@@ -210,9 +231,10 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get install -y rpm
-          rpm -qpl dist/credstore-*.rpm | tee rpm-files.txt
+          rpm -qpl dist/credstore-[0-9]*.rpm | tee rpm-files.txt
           grep -qx /usr/bin/credstored rpm-files.txt
-          rpm -qp --scripts dist/credstore-*.rpm | grep -q 'install.sh --package'
+          rpm -qp --scripts dist/credstore-[0-9]*.rpm | grep -q 'install.sh --package'
+          rpm -qpl dist/credstore-app-*.rpm | grep -qx /usr/bin/credstore-app
 
       - name: Build and install the .pkg, smoke test (macOS)
         if: runner.os == 'macOS'
@@ -227,8 +249,11 @@ jobs:
           sudo install -m 0755 target/debug/credstore-adversary /usr/local/credstore-smoke/
           sudo -u "$USER" env CREDSTORE_SMOKE_DIR=/usr/local/credstore-smoke "$(cat smoke-test-path.txt)" --ignored --nocapture
           sudo -u "$USER" credstore doctor </dev/null
+          CREDSTORE_APP_SMOKE=1 /Applications/credstore.app/Contents/MacOS/credstore-app 2>&1 | tee app.txt
+          grep -q 'page ready: installed reachable=true' app.txt
           sudo /usr/local/share/credstore/install.sh --uninstall
           ! test -e /usr/local/bin/credstored
+          ! test -e /Applications/credstore.app
 
       - name: Build the .msi (Windows)
         if: runner.os == 'Windows'
@@ -259,6 +284,19 @@ jobs:
             -RedirectStandardOutput "$smoke\out.txt" -RedirectStandardError "$smoke\err.txt"
           Get-Content "$smoke\out.txt", "$smoke\err.txt"
           if ($p.ExitCode -ne 0) { throw "smoke test failed ($($p.ExitCode))" }
+      - name: Smoke test the desktop app (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          if (-not (Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\credstore.lnk")) { throw 'app shortcut missing' }
+          # The runner account is not in the credstore groups (cssmoke is), so the page
+          # loads and reports the service as unreachable; the load is what is checked.
+          $env:CREDSTORE_APP_SMOKE = '1'
+          $p = Start-Process "$env:ProgramFiles\credstore\credstore-app.exe" -Wait -PassThru `
+            -RedirectStandardOutput app-out.txt -RedirectStandardError app-err.txt
+          Get-Content app-out.txt, app-err.txt
+          if ($p.ExitCode -ne 0) { throw "app smoke failed ($($p.ExitCode))" }
+          if (-not (Select-String -Path app-out.txt -Pattern 'page ready: installed' -Quiet)) { throw 'page did not load' }
       - name: MSI and service logs (Windows)
         if: failure() && runner.os == 'Windows'
         shell: powershell
@@ -274,6 +312,7 @@ jobs:
           if ($p.ExitCode -ne 0) { Get-Content msi-remove.log -Tail 80; throw "msiexec /x failed ($($p.ExitCode))" }
           if (Get-Service credstore -ErrorAction SilentlyContinue) { throw 'service still there' }
           if (Test-Path "$env:ProgramFiles\credstore\credstored.exe") { throw 'binaries still there' }
+          if (Test-Path "$env:ProgramFiles\credstore\credstore-app.exe") { throw 'app still there' }
           if (-not (Test-Path "$env:ProgramData\credstore")) { throw 'the vault directory was removed' }
 
       - uses: actions/upload-artifact@v4

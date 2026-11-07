@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The credstore desktop app bundle (M10). build-pkg.sh fills in @VERSION@. -->
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>credstore</string>
+  <key>CFBundleDisplayName</key>
+  <string>credstore</string>
+  <key>CFBundleIdentifier</key>
+  <string>dev.credstore.app</string>
+  <key>CFBundleExecutable</key>
+  <string>credstore-app</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>@VERSION@</string>
+  <key>CFBundleVersion</key>
+  <string>@VERSION@</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>11.0</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+</dict>
+</plist>

@@ -15,6 +15,15 @@ install -m 0755 target/release/credstore target/release/credstored "$root/usr/lo
 install -m 0755 deploy/install.sh "$root/usr/local/share/credstore/"
 install -m 0644 deploy/policy.toml deploy/dev.credstore.daemon.plist \
     deploy/dev.credstore.rundir.plist "$root/usr/local/share/credstore/"
+# The desktop app (M10), when built (cargo build --release in app/), as a minimal bundle.
+if [ -x app/target/release/credstore-app ]; then
+    bundle="$root/Applications/credstore.app/Contents"
+    install -d "$bundle/MacOS" "$bundle/Resources"
+    install -m 0755 app/target/release/credstore-app "$bundle/MacOS/credstore-app"
+    install -m 0644 app/icons/icon.png "$bundle/Resources/icon.png"
+    sed "s/@VERSION@/$VERSION/g" packaging/macos/Info.plist >"$bundle/Info.plist"
+    echo "desktop app included"
+fi
 chmod 0755 packaging/macos/scripts/postinstall
 mkdir -p dist
 sign=()

@@ -62,25 +62,43 @@ pub async fn watch(client: &Client, p: &dyn Prompt, out: &mut dyn Write) -> anyh
     }
 }
 
-/// Print everything the human needs to decide. All agent-supplied text goes through
-/// `printable`, so control characters can't redraw the screen.
-pub fn show(r: &PendingRequest, out: &mut dyn Write) -> anyhow::Result<()> {
-    writeln!(out)?;
-    writeln!(out, "=== Request {} ===", printable(&r.id.0))?;
-    writeln!(out, "reason:   {}", printable(&r.reason))?;
-    match (&r.argv, &r.shell) {
-        (Some(argv), _) => {
-            let line: Vec<String> = argv.iter().map(|a| quote(a)).collect();
-            writeln!(out, "command:  {}", line.join(" "))?;
-        }
-        (None, Some(shell)) => writeln!(out, "shell:    {}", printable(shell))?,
-        (None, None) => {}
-    }
-    if let Some(prog) = &r.program {
-        writeln!(out, "program:  {}", printable(prog))?;
-    }
-    writeln!(out, "cwd:      {}", printable(&r.cwd))?;
-    let secrets: Vec<String> = r
+/// Everything the human needs to decide, as display text. All agent-supplied text goes
+/// through `printable`, so control characters cannot redraw a terminal; the desktop app
+/// shows these strings as plain text, never as markup.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RequestView {
+    pub id: String,
+    pub reason: String,
+    /// The argv, quoted, or the shell string.
+    pub command: String,
+    pub is_shell: bool,
+    pub program: Option<String>,
+    pub cwd: String,
+    /// `NAME` or `NAME (description)`.
+    pub secrets: Vec<String>,
+    pub injection: String,
+    pub sandbox: String,
+    /// The network rule, with allowed hosts if any.
+    pub network: String,
+    /// What policy asked for that this run will not get.
+    pub not_enforced: Vec<String>,
+    /// Who asked: uid or SID, pid, executable.
+    pub from: String,
+    /// Longest "approve for this session"; 0 means once only.
+    pub max_grant_secs: u64,
+    pub max_grant: String,
+}
+
+pub fn describe(r: &PendingRequest) -> RequestView {
+    let (command, is_shell) = match (&r.argv, &r.shell) {
+        (Some(argv), _) => (
+            argv.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" "),
+            false,
+        ),
+        (None, Some(shell)) => (printable(shell), true),
+        (None, None) => (String::new(), false),
+    };
+    let secrets = r
         .secrets
         .iter()
         .map(|s| {
@@ -91,28 +109,14 @@ pub fn show(r: &PendingRequest, out: &mut dyn Write) -> anyhow::Result<()> {
             }
         })
         .collect();
-    writeln!(out, "secrets:  {}", secrets.join(", "))?;
-    writeln!(
-        out,
-        "inject:   {}",
-        credstore_core::policy::injection_name(r.injection)
-    )?;
-    let sandbox = serde_json::to_value(r.sandbox)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_owned))
-        .unwrap_or_default();
-    let network = serde_json::to_value(r.network)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_owned))
-        .unwrap_or_default();
-    let hosts = if r.allow_hosts.is_empty() {
-        String::new()
-    } else {
-        format!(" ({})", printable(&r.allow_hosts.join(", ")))
+    let label = |v: serde_json::Result<serde_json::Value>| {
+        v.ok()
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_default()
     };
-    writeln!(out, "sandbox:  {sandbox}    network: {network}{hosts}")?;
-    for gap in &r.sandbox_gaps {
-        writeln!(out, "  NOT ENFORCED: {}", printable(gap))?;
+    let mut network = label(serde_json::to_value(r.network));
+    if !r.allow_hosts.is_empty() {
+        network.push_str(&format!(" ({})", printable(&r.allow_hosts.join(", "))));
     }
     let mut from = Vec::new();
     if let Some(uid) = r.peer.uid {
@@ -127,7 +131,49 @@ pub fn show(r: &PendingRequest, out: &mut dyn Write) -> anyhow::Result<()> {
     if let Some(exe) = &r.peer.exe {
         from.push(format!("exe {}", printable(exe)));
     }
-    writeln!(out, "from:     {}", from.join(", "))?;
+    RequestView {
+        id: printable(&r.id.0),
+        reason: printable(&r.reason),
+        command,
+        is_shell,
+        program: r.program.as_deref().map(printable),
+        cwd: printable(&r.cwd),
+        secrets,
+        injection: credstore_core::policy::injection_name(r.injection).to_owned(),
+        sandbox: label(serde_json::to_value(r.sandbox)),
+        network,
+        not_enforced: r.sandbox_gaps.iter().map(|g| printable(g)).collect(),
+        from: from.join(", "),
+        max_grant_secs: r.max_grant_secs,
+        max_grant: if r.max_grant_secs > 0 {
+            duration(r.max_grant_secs)
+        } else {
+            String::new()
+        },
+    }
+}
+
+/// Print everything the human needs to decide.
+pub fn show(r: &PendingRequest, out: &mut dyn Write) -> anyhow::Result<()> {
+    let v = describe(r);
+    writeln!(out)?;
+    writeln!(out, "=== Request {} ===", v.id)?;
+    writeln!(out, "reason:   {}", v.reason)?;
+    if !v.command.is_empty() {
+        let label = if v.is_shell { "shell:   " } else { "command: " };
+        writeln!(out, "{label} {}", v.command)?;
+    }
+    if let Some(prog) = &v.program {
+        writeln!(out, "program:  {prog}")?;
+    }
+    writeln!(out, "cwd:      {}", v.cwd)?;
+    writeln!(out, "secrets:  {}", v.secrets.join(", "))?;
+    writeln!(out, "inject:   {}", v.injection)?;
+    writeln!(out, "sandbox:  {}    network: {}", v.sandbox, v.network)?;
+    for gap in &v.not_enforced {
+        writeln!(out, "  NOT ENFORCED: {gap}")?;
+    }
+    writeln!(out, "from:     {}", v.from)?;
     Ok(())
 }
 
@@ -200,7 +246,7 @@ async fn decide(
 }
 
 /// Display form of one argument: quoted when it has spaces, quotes or nothing in it.
-fn quote(a: &str) -> String {
+pub(crate) fn quote(a: &str) -> String {
     let a = printable(a);
     if !a.is_empty() && !a.contains([' ', '\t', '"', '\'']) {
         a
@@ -209,7 +255,7 @@ fn quote(a: &str) -> String {
     }
 }
 
-fn duration(secs: u64) -> String {
+pub(crate) fn duration(secs: u64) -> String {
     match secs {
         s if s % 3600 == 0 => format!("{} h", s / 3600),
         s if s % 60 == 0 => format!("{} min", s / 60),

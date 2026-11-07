@@ -14,4 +14,9 @@ export VERSION ARCH
 mkdir -p dist
 nfpm package --config packaging/nfpm.yaml --packager deb --target dist/
 nfpm package --config packaging/nfpm.yaml --packager rpm --target dist/
+# The desktop app (M10), when built (cargo build --release in app/).
+if [ -x app/target/release/credstore-app ]; then
+    nfpm package --config packaging/nfpm-app.yaml --packager deb --target dist/
+    nfpm package --config packaging/nfpm-app.yaml --packager rpm --target dist/
+fi
 ls -l dist/

@@ -48,6 +48,9 @@ approval notifications with the passphrase entered in the app, secrets manager (
 write-only), audit log viewer, and a health page running `doctor`. It uses the same
 approver endpoint as the CLI, so the security model does not change.
 
+Built: everything above except the audit viewer, which would need the audit log readable
+by approvers (see `docs/DESIGN.md`, "Desktop app").
+
 ## M11: auth proxy
 
 Per-run local HTTP proxy. A secret declares its upstream base URL and allowed hosts; the

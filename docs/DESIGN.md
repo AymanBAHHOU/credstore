@@ -645,6 +645,55 @@ approved commands in `~/credstore-smoke`, opened up with `credstore grant --yes`
 sudo); on Windows `credstore grant` replaces the hand-written icacls. Unit tests cover the
 users file and the grant plans.
 
+## Desktop app (M10)
+
+`app/` is a Tauri 2 app, `credstore-app`. It is its own Cargo workspace (the root one
+excludes it), so building and testing the core does not need a webview toolkit.
+
+**Same security model.** The app is a client like the CLI: it talks to the agent and
+approver endpoints as the user, every approver operation sends the passphrase, and
+nothing is cached in the app. The Rust side is thin commands that forward to
+`credstore::api`, a library module the CLI's pieces were refactored into
+(`create_vault`, `describe` for pending requests, `setup` for Claude Code, `grant`,
+`doctor` with a given passphrase). `crates/credstore/tests/api_dev.rs` drives that module
+against a dev daemon: vault, set, list, a pending request approved with the wrong and
+then the right passphrase, remove, lock.
+
+**What the page can do.** The page gets `core:default` only; the folder picker and
+notifications are called from Rust. CSP allows only the app's own files and Tauri IPC,
+and `freezePrototype` is on. Every string from an agent or the daemon is set with
+`textContent`, so a request's reason or command cannot inject markup. Passphrases and
+secret values go from the page to Rust as strings and are wrapped in `SecretText`
+immediately; no command returns one. Input fields are cleared as they are read.
+
+**Tabs.** Approvals (start watching with the passphrase; each request shows the same
+fields as `credstore watch`, including what is not enforced; approve once, approve for
+the policy's maximum, or deny, each with the passphrase), Secrets (list, add or replace,
+remove; values are write-only), Folders (pick a folder, see the exact grant commands,
+run them), Claude Code (registered at user scope, deny rules; one button runs the same
+steps as `credstore setup`), Health (`doctor`, optionally with the passphrase).
+
+**Tray.** Closing the window hides it; the tray icon reopens or quits. A new pending
+request raises an OS notification. On a desktop without a tray the window just closes.
+
+**Not built: the audit viewer** (planned in the roadmap). In installed mode the audit log
+is readable only by the service account and admins (spec 8), and adding an endpoint to
+read it would widen what a member of `credstore-approvers` can see. Left for later.
+
+**Packages.** When the app was built, `build-msi.ps1` adds `credstore-app.exe` and a
+"credstore" Start menu shortcut to the MSI, `build-pkg.sh` adds a minimal
+`/Applications/credstore.app` bundle (removed by `install.sh --uninstall`), and
+`build-linux.sh` builds a separate `credstore-app` `.deb`/`.rpm` that depends on
+`credstore` and the WebKitGTK and appindicator libraries.
+
+**Tested.** `CREDSTORE_APP_SMOKE=1` makes the app exit once the page has loaded and
+called the backend (with a 90 s watchdog), printing what the page saw. CI's `packages`
+job runs it from each installed package: on Linux under `xvfb-run` and on macOS it must
+report the installed service as reachable; on Windows the runner account is not an
+allowed user, so the check is that the page loads. The layout was checked in a browser
+with a stubbed backend. Not tested: clicking through the tabs in the real app, and
+notifications and the tray on a real desktop.
+
 ## Stubbed per OS
 
 | Capability      | Linux                 | macOS                 | Windows               |
@@ -662,6 +711,7 @@ users file and the grant plans.
 | Service install | systemd unit + `install.sh` (CI) | launchd + `install.sh` (CI) | SCM service + `install.ps1` (CI) |
 | Package         | `.deb` (CI install), `.rpm` (built, inspected) | `.pkg`, unsigned (CI install) | `.msi`, unsigned (CI install) |
 | `doctor`        | done                  | done (no memory probe) | done                  |
+| Desktop app     | done (smoke under xvfb, CI) | done (smoke, CI) | done (smoke, CI) |
 
 Stubs return `OsError::Unavailable("<mechanism> not built yet (Mx)")`; the daemon logs
 each unavailable hardening feature at startup.

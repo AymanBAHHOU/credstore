@@ -110,6 +110,10 @@ if [ "$uninstall" = 1 ]; then
         rm -f "$bin/credstore" "$bin/credstored"
     fi
     if [ "$os" = Darwin ]; then
+        # The desktop app, if the .pkg installed it.
+        if pkgutil --files dev.credstore 2>/dev/null | grep -qx 'Applications/credstore.app'; then
+            rm -rf /Applications/credstore.app
+        fi
         pkgutil --forget dev.credstore >/dev/null 2>&1 || true
     fi
     say "removed the service and the binaries"

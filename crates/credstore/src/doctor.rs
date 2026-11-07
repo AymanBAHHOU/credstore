@@ -21,7 +21,8 @@ use credstore_proto::{AgentRequest, ApproverOp, Response};
 use crate::client::{expect_status, response_error, Client};
 use crate::commands::Prompt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Level {
     Ok,
     Info,
@@ -40,7 +41,7 @@ impl Level {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Check {
     pub level: Level,
     pub topic: &'static str,
@@ -48,7 +49,7 @@ pub struct Check {
 }
 
 /// Every check doctor made, in order.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize)]
 pub struct Report {
     pub checks: Vec<Check>,
 }

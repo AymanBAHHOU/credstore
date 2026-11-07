@@ -3,6 +3,7 @@
   credstore Windows installer (M8). Built by packaging/build-msi.ps1 with WiX 5.
 
   The MSI owns the files, the PATH entry and a Start menu shortcut to `credstore setup`.
+  When build-msi.ps1 finds the desktop app (M10) it is included, with its own shortcut.
   Everything else (service, groups, ACLs, policy) is done by the same install.ps1 that
   installs from source, run with -Package as a deferred custom action (as SYSTEM).
 
@@ -44,6 +45,11 @@
       <Component>
         <File Source="$(var.DeployDir)\policy.toml" KeyPath="yes" />
       </Component>
+<?if $(var.WithApp) = "1" ?>
+      <Component>
+        <File Source="$(var.AppExe)" Name="credstore-app.exe" KeyPath="yes" />
+      </Component>
+<?endif?>
       <Component Id="PathEntry" Guid="0c1f7e52-3b9a-4d61-8f0e-7a2c5d9b13e8">
         <Environment Id="PathEntry" Name="PATH" Value="[INSTALLFOLDER]" Part="last"
                      Action="set" System="yes" />
@@ -64,9 +70,24 @@
       </Component>
     </StandardDirectory>
 
+<?if $(var.WithApp) = "1" ?>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="AppShortcut" Guid="3d8b6f21-a47c-4e95-8c0a-51f9e2b7d460">
+        <Shortcut Id="AppShortcut" Name="credstore"
+                  Description="Approve requests and manage credstore secrets"
+                  Target="[INSTALLFOLDER]credstore-app.exe" WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\credstore" Name="AppShortcut"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+<?endif?>
+
     <Feature Id="Main">
       <ComponentGroupRef Id="Files" />
       <ComponentRef Id="SetupShortcut" />
+<?if $(var.WithApp) = "1" ?>
+      <ComponentRef Id="AppShortcut" />
+<?endif?>
     </Feature>
 
     <!-- The installing user, unless CREDSTOREUSER was given. -->
