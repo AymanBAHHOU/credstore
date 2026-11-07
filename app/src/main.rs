@@ -9,10 +9,14 @@
 //! the page contains one.
 //!
 //! The window hides to the tray when closed, so approvals keep arriving. A new request
-//! raises an OS notification and brings the window to the front. `--dev` talks to a
+//! slides out of the island at the top of the screen (`island.rs`), where it can be
+//! decided without opening the window; if the island cannot be shown, an OS
+//! notification is raised and the window comes forward instead. `--dev` talks to a
 //! dev-mode daemon.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod island;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -26,7 +30,7 @@ use credstore_os::{Mode, Platform};
 use credstore_proto::SecretText;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow, WindowEvent};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::NotificationExt;
 
@@ -34,6 +38,8 @@ struct AppState {
     api: Api,
     /// The running subscription to pending requests, if any.
     watching: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
+    /// The last feed, for a page that opens after it arrived (the island).
+    last_feed: Mutex<Option<FeedView>>,
 }
 
 type CmdResult<T> = Result<T, String>;
@@ -129,26 +135,35 @@ async fn start_watching(
                     // Requests already waiting when watching starts are not new.
                     view.pending.iter().map(|r| r.id.clone()).collect()
                 });
-                let mut fresh = false;
-                for r in &view.pending {
-                    if seen.insert(r.id.clone()) {
-                        fresh = true;
-                        let _ = notify
-                            .notification()
-                            .builder()
-                            .title("credstore: approval needed")
-                            .body(format!(
-                                "{} wants {}",
-                                short(&r.reason),
-                                r.secrets.join(", ")
-                            ))
-                            .show();
-                    }
-                }
+                let fresh: Vec<_> = view
+                    .pending
+                    .iter()
+                    .filter(|r| seen.insert(r.id.clone()))
+                    .collect();
                 seen.retain(|id| view.pending.iter().any(|r| &r.id == id));
+                if let Some(s) = notify.try_state::<AppState>() {
+                    *s.last_feed.lock().unwrap() = Some(view.clone());
+                }
                 let _ = notify.emit("feed", &view);
-                if fresh {
-                    bring_to_front(&notify);
+                // The island hides itself once nothing is left to show (after a short
+                // "Approved" or "Denied"), so only showing it is done here.
+                if !fresh.is_empty() {
+                    if let Err(e) = island::show(&notify) {
+                        eprintln!("credstore-app: cannot show the island: {e}");
+                        for r in &fresh {
+                            let _ = notify
+                                .notification()
+                                .builder()
+                                .title("credstore: approval needed")
+                                .body(format!(
+                                    "{} wants {}",
+                                    short(&r.reason),
+                                    r.secrets.join(", ")
+                                ))
+                                .show();
+                        }
+                        bring_to_front(&notify);
+                    }
                 }
             })
             .await;
@@ -161,8 +176,12 @@ async fn start_watching(
                 let _ = tx.send(Err(reason));
             }
             None => {
+                island::hide(&handle);
                 let _ = handle.emit("watch-ended", reason);
             }
+        }
+        if let Some(s) = handle.try_state::<AppState>() {
+            *s.last_feed.lock().unwrap() = None;
         }
     });
     if let Some(old) = state.watching.lock().unwrap().replace(task) {
@@ -176,10 +195,40 @@ async fn start_watching(
 
 /// Stop the live feed.
 #[tauri::command]
-fn stop_watching(state: State<'_, AppState>) {
+fn stop_watching(app: AppHandle, state: State<'_, AppState>) {
     if let Some(old) = state.watching.lock().unwrap().take() {
         old.abort();
     }
+    *state.last_feed.lock().unwrap() = None;
+    island::hide(&app);
+}
+
+/// The last feed, or `None` when not watching. The island asks when it opens.
+#[tauri::command]
+fn current_feed(state: State<'_, AppState>) -> Option<FeedView> {
+    state.last_feed.lock().unwrap().clone()
+}
+
+/// The island measured its content (logical pixels).
+#[tauri::command]
+fn island_size(app: AppHandle, window: WebviewWindow, width: f64, height: f64) -> CmdResult<()> {
+    if window.label() != island::LABEL {
+        return Ok(());
+    }
+    island::resize(&app, &window, width, height).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn island_hide(app: AppHandle) {
+    island::hide(&app);
+}
+
+/// "Open credstore" from the island: the full window, on the Approvals page.
+#[tauri::command]
+fn open_main(app: AppHandle) {
+    island::hide(&app);
+    show_main(&app);
+    let _ = app.emit_to("main", "show-page", "approvals");
 }
 
 #[tauri::command]
@@ -369,6 +418,7 @@ fn main() {
     let state = AppState {
         api: Api::new(Client::new(platform)),
         watching: Mutex::new(None),
+        last_feed: Mutex::new(None),
     };
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -382,6 +432,10 @@ fn main() {
             lock,
             start_watching,
             stop_watching,
+            current_feed,
+            island_size,
+            island_hide,
+            open_main,
             set_secret_rules,
             set_defaults,
             set_hello,
@@ -418,6 +472,11 @@ fn main() {
         .on_window_event(|window, event| {
             // Closing hides to the tray, so approvals keep arriving.
             if let WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == island::LABEL {
+                    let _ = window.hide();
+                    api.prevent_close();
+                    return;
+                }
                 if window.app_handle().tray_by_id("main").is_some() {
                     let _ = window.hide();
                     api.prevent_close();

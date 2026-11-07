@@ -49,7 +49,8 @@ thing.
 **Desktop app.** The Windows and macOS packages also install the credstore app (Start
 menu "credstore", or `/Applications/credstore.app`); on Linux install
 `credstore-app_VERSION_amd64.deb` (or the `.rpm`) too. It does the same as the commands
-below without a terminal: approve requests (the window comes forward when one arrives),
+below without a terminal: approve requests (each one slides out of a small island at the top of the screen,
+where you can decide without opening the window),
 see the activity history and requests the policy refused, add and remove secrets and
 choose the hosts and commands each one may be used with, grant folders, connect Claude
 Code, run the health check, and turn Windows Hello approval on or off. Closing the

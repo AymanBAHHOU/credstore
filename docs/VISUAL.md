@@ -49,6 +49,13 @@ body 15 px; labels 11.5 px mono, uppercase, letter-spaced.
 - **Chips** for hosts and command patterns; a dashed chip says what an empty list means.
 - **Save bar** appears only with unsaved changes: count, passphrase, Discard, Save.
 - **Switch** for on/off settings; selects for timers.
+- **Island**: a waiting request at the top of the screen. Collapsed, an obsidian pill
+  with a hairline edge, a red dot, "Agent wants NAME → host" (the name in mono) and a
+  red count when more wait. Open, a 560 px box with 18 px radius: the red "Waiting for
+  you" band, a mono readout, the passphrase field and the decision buttons, "Open
+  credstore" as a text link. It drops in from 12 px above (none with reduced motion).
+  After a decision it shrinks to a pill saying "Approved once" (ice dot) or "Denied"
+  (red ring) for a moment.
 - **Passphrase dialog** for changes: never pre-filled, cleared after use, stays open on
   a wrong passphrase.
 

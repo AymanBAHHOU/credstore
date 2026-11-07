@@ -1,0 +1,117 @@
+/* The island (docs/VISUAL.md): the same obsidian, ice and red as the app, as a pill at
+   the top of the screen. The window is transparent and sized to the island, so only
+   the island itself is drawn. No shadows or glows. */
+
+@font-face {
+  font-family: "Geist";
+  src: url("fonts/geist-latin-wght-normal.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Mono";
+  src: url("fonts/geist-mono-latin-wght-normal.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+:root {
+  --obsidian: #0E0F12;
+  --ice: #DCE3EA;
+  --red: #D40000;
+  --text-2: #A3ADB8;
+  --text-3: #76808B;
+  --line: rgba(220, 227, 234, .12);
+  --line-2: rgba(220, 227, 234, .22);
+  --fill: rgba(220, 227, 234, .04);
+  --fill-2: rgba(220, 227, 234, .07);
+  --red-text: #FF6A5E;
+  --sans: "Geist", "Segoe UI", system-ui, sans-serif;
+  --mono: "Geist Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; background: transparent; overflow: hidden; }
+body { font: 14px/1.45 var(--sans); color: var(--ice); -webkit-font-smoothing: antialiased; user-select: none; }
+
+/* The island sizes itself; the window follows (island_size). */
+.island { width: max-content; background: var(--obsidian); border: 1px solid var(--line-2); }
+.island:empty { display: none; }
+.island.arrive { animation: drop .22s cubic-bezier(.2, .8, .2, 1); }
+@keyframes drop { from { transform: translateY(-12px); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .island.arrive { animation: none; } }
+
+/* ---------------------------------------------------------------- pill */
+
+.island.pill { border-radius: 999px; max-width: 520px; }
+.pill-btn {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 11px 14px 11px 16px; border: 0; background: none; color: inherit;
+  font: inherit; text-align: left; cursor: pointer; border-radius: 999px;
+}
+.pill-btn:focus-visible { outline: 2px solid var(--ice); outline-offset: -3px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--red); flex: none; }
+.pill-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.pill-text .who { color: var(--text-2); }
+.pill-text .name { font-family: var(--mono); font-size: 13px; }
+.pill-text .to { color: var(--text-2); }
+.count {
+  flex: none; font: 600 11.5px/1 var(--mono); color: #fff; background: var(--red);
+  border-radius: 999px; padding: 4px 7px;
+}
+.chev { flex: none; color: var(--text-3); font-size: 18px; line-height: 1; margin-left: 2px; }
+
+/* ---------------------------------------------------------------- done */
+
+.island.done { border-radius: 999px; padding: 11px 18px; display: flex; align-items: center; gap: 10px; }
+.done .tick { width: 9px; height: 9px; border-radius: 50%; background: var(--ice); }
+.done.no .tick { background: transparent; border: 1.5px solid var(--red-text); }
+
+/* ---------------------------------------------------------------- open */
+
+.island.open { width: 560px; border-radius: 18px; overflow: hidden; }
+.band {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 16px;
+  background: var(--red); color: #fff; font-weight: 600;
+}
+.band .of { font: 500 12px/1 var(--mono); opacity: .85; }
+.band .grow { flex: 1; }
+.band button {
+  border: 0; background: rgba(255, 255, 255, .14); color: #fff; font: inherit; font-weight: 500;
+  border-radius: 999px; padding: 4px 10px; cursor: pointer;
+}
+.band button:hover { background: rgba(255, 255, 255, .24); }
+.band button:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
+
+.kv { display: grid; grid-template-columns: 92px 1fr; gap: 8px 14px; margin: 0; padding: 14px 16px 6px; }
+.kv dt { font: 500 11px/1.9 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); }
+.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; user-select: text; }
+.code { font: 12.5px/1.5 var(--mono); }
+.code.em { color: var(--ice); }
+.reason { color: var(--text-2); }
+.gap-line { display: block; color: var(--red-text); font-size: 13px; }
+
+.decide { padding: 10px 16px 14px; display: grid; gap: 10px; }
+.input {
+  width: 100%; padding: 9px 14px; border-radius: 999px; border: 1px solid var(--line-2);
+  background: var(--fill); color: var(--ice); font: inherit; user-select: text;
+}
+.input::placeholder { color: var(--text-3); }
+.input:focus { outline: 2px solid var(--ice); outline-offset: 1px; }
+.buttons { display: flex; gap: 8px; align-items: center; }
+.buttons .grow { flex: 1; }
+.btn {
+  border: 1px solid var(--line-2); background: var(--fill); color: var(--ice); font: inherit;
+  font-weight: 500; border-radius: 999px; padding: 7px 14px; cursor: pointer; white-space: nowrap;
+}
+.btn:hover { background: var(--fill-2); }
+.btn.primary { background: var(--ice); color: var(--obsidian); border-color: var(--ice); }
+.btn.primary:hover { background: #fff; }
+.btn.link { border-color: transparent; background: none; color: var(--text-2); padding: 7px 4px; }
+.btn.link:hover { color: var(--ice); }
+.btn:focus-visible { outline: 2px solid var(--ice); outline-offset: 2px; }
+.btn.busy { opacity: .6; pointer-events: none; }
+.msg { margin: 0; font-size: 13px; color: var(--text-2); }
+.msg:empty { display: none; }
+.msg.bad { color: var(--red-text); }

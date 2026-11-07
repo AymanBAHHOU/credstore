@@ -799,7 +799,42 @@ visible. Hello's dialog belongs to a system broker process and often opened behi
 app; `credstore-os` (`sys/windows/foreground.rs`, a small commented `unsafe` module)
 now calls `AllowSetForegroundWindow(ASFW_ANY)` and, while a Hello request is open,
 brings the window of class `Credential Dialog Xaml Host` forward. Not tested on CI (no
-desktop): checked by hand only.
+desktop): checked by hand only. Since the island (below), the window no longer comes
+forward on a request; this is now the fallback when the island cannot be shown.
+
+**The island (2026-11-07).** The owner did not want the whole window to pop up for
+each request, and pointed at their F1 Island (a Dynamic Island style pill at the top of
+the screen). On a new request the app now shows a second, small window, `island`
+(`app/src/island.rs`, `app/ui/island.*`), at the top-centre of the screen the mouse is
+on, instead of the OS notification and the window. The owner chose: only while a
+request waits (nothing on screen otherwise); decide in the island; the main window
+stays where it is.
+
+- Collapsed it is a pill: "Agent wants NAME → host" (or the program), with a red count
+  when more are waiting. Hovering or clicking opens it: the secret, the request (with
+  its body) or command and folder, the agent's reason, anything not enforced, a
+  passphrase field, and Deny / Approve for the policy's maximum / Approve once. "Open
+  credstore" shows the full request on the Approvals page (headers, sandbox, who
+  asked). Leaving with the mouse closes it again unless it was opened by a click, a
+  decision is being sent, or the passphrase field has text.
+- Deciding uses the same `decide` command as the Approvals page: an empty field means
+  Windows Hello, offered only when the vault trusts the key and is open. Every
+  approval still needs the passphrase or Hello, as before; the island adds no way
+  around them.
+- The window is borderless, transparent, always on top, out of the taskbar, and does
+  not take the keyboard when it appears (clicking the field gives it the keyboard).
+  The page measures itself and the window is resized to it (`island_size`, clamped),
+  so nothing around the island blocks clicks. It hides itself after a short
+  "Approved" / "Denied" once nothing is waiting, and when watching stops.
+- It needs the feed, like the Approvals page: requests that arrive before "Connect"
+  are not shown (that has not changed).
+- If the island cannot be created, the app falls back to the notification and the
+  window, as before.
+
+The helpers both pages use moved to `app/ui/shared.js`. `top_centre` has a unit test;
+the page was checked in a browser with a stubbed backend (pill, open, next, approve,
+deny, hiding when empty, a key from an older vault, "Open credstore"). Not tested on
+CI (no desktop) and not yet in the real app.
 
 **Icon.** `app/icons/make_icons.py` draws the mark (VISUAL.md) at 16 to 256 px into the
 PNGs and a multi-size ICO; Tauri uses them for the window, taskbar and tray, and the MSI
