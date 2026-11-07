@@ -2,8 +2,9 @@
 <!--
   credstore Windows installer (M8). Built by packaging/build-msi.ps1 with WiX 5.
 
-  The MSI owns the files, the PATH entry and a Start menu shortcut to `credstore setup`.
-  When build-msi.ps1 finds the desktop app (M10) it is included, with its own shortcut.
+  The MSI owns the files, the PATH entry and a Start menu shortcut. When build-msi.ps1
+  finds the desktop app (M10) it is included and its shortcut is the only one: the app
+  guides first-time setup itself. Without the app, the shortcut runs `credstore setup`.
   Everything else (service, groups, ACLs, policy) is done by the same install.ps1 that
   installs from source, run with -Package as a deferred custom action (as SYSTEM).
 
@@ -68,6 +69,7 @@
       </Component>
     </ComponentGroup>
 
+<?if $(var.WithApp) != "1" ?>
     <StandardDirectory Id="ProgramMenuFolder">
       <Component Id="SetupShortcut" Guid="9a4e2d17-6c3b-4f08-b1d5-e8f27a03c6b9">
         <Shortcut Id="SetupShortcut" Name="credstore setup"
@@ -79,6 +81,7 @@
                        Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </StandardDirectory>
+<?endif?>
 
 <?if $(var.WithApp) = "1" ?>
     <StandardDirectory Id="ProgramMenuFolder">
@@ -95,9 +98,10 @@
 
     <Feature Id="Main">
       <ComponentGroupRef Id="Files" />
-      <ComponentRef Id="SetupShortcut" />
 <?if $(var.WithApp) = "1" ?>
       <ComponentRef Id="AppShortcut" />
+<?else?>
+      <ComponentRef Id="SetupShortcut" />
 <?endif?>
     </Feature>
 
@@ -136,7 +140,7 @@
     <!-- Shown on the finish page (also after a repair or removal, hence the wording). -->
 <?if $(var.WithApp) = "1" ?>
     <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT"
-              Value="The credstore service is running. Open the credstore app (Start menu) to create your vault, add secrets and connect Claude Code. No sign-out or restart is needed, except for page file encryption, which applies at the next restart." />
+              Value="The credstore service is running. The credstore app walks you through creating your vault, connecting Claude Code and, if you want, Windows Hello. No sign-out or restart is needed, except for page file encryption, which applies at the next restart." />
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Open credstore now" />
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
     <!-- Runs from the finish page, so as the user, not elevated. -->

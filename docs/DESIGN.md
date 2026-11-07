@@ -836,6 +836,31 @@ the page was checked in a browser with a stubbed backend (pill, open, next, appr
 deny, hiding when empty, a key from an older vault, "Open credstore"). Not tested on
 CI (no desktop) and not yet in the real app.
 
+**First-run guide (2026-11-07).** The owner asked why `credstore setup` is a separate
+step. The installer cannot do it: it runs elevated for the whole machine, while the
+vault passphrase and the Claude Code settings belong to one user, and a passphrase
+typed into an installer page could end up in Windows Installer's logs. The app runs
+as the user, so it now does it: the first time it starts and reaches the service, if
+there are no secrets or Claude Code is not connected, it opens a "Set up credstore"
+page (`#m-welcome`) with three steps, using the commands the other pages already use:
+
+1. Create the vault (`create_vault`; "already exists" is said plainly, as `credstore
+   setup` does, because an empty list cannot tell an empty vault from none). The same
+   passphrase then starts the feed, so requests reach the island at once.
+2. Connect Claude Code (`connect_claude`), or say how to install it and check again.
+3. Optional, when Windows Hello is set up for the account: turn it on (`set_hello`).
+
+Steps 2 and 3 can be put off ("Later"); the vault is needed to finish. "Add your first
+secret" ends on the Secrets page with the form open; "Finish later" ends on Approvals.
+Either way the guide does not open by itself again (a flag in the page's local
+storage); Health > "Open the setup guide" reopens it. An existing setup never sees it.
+
+With the app installed, the MSI no longer adds the "credstore setup" Start menu entry,
+and its finish page points to the app; without the app it is as before. `credstore
+setup` itself is unchanged for the terminal and Linux. Checked in a browser with a
+stubbed backend (fresh install, each step, a short passphrase, finishing, reopening
+from Health, an existing setup); not yet in the real app.
+
 **Icon.** `app/icons/make_icons.py` draws the mark (VISUAL.md) at 16 to 256 px into the
 PNGs and a multi-size ICO; Tauri uses them for the window, taskbar and tray, and the MSI
 now sets `ARPPRODUCTICON` and the Start menu shortcuts' icon.
