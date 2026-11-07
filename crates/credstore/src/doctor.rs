@@ -246,12 +246,15 @@ fn group_checks(d: &mut Doctor<'_>, mode: Mode, user: &str) {
             Ok(m) if m.active => {
                 d.check(Level::Ok, "groups", format!("{user} is in {group}"));
             }
+            // The installer also lists the user in the daemon's users file, which lets
+            // them in before the group reaches their session; the endpoint checks below
+            // show whether that worked.
             Ok(m) if m.listed == Some(true) => d.check(
-                Level::Fail,
+                Level::Info,
                 "groups",
                 format!(
-                    "{user} was added to {group} but this session predates it: log out and \
-                     back in"
+                    "{user} is in {group}; this session predates it, so it applies at the \
+                     next logon (the installer also lets you in directly)"
                 ),
             ),
             Ok(_) => d.check(

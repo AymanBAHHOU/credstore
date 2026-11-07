@@ -579,6 +579,72 @@ rules merged into existing settings, second run changes nothing, no terminal ref
 and unit tests for the settings merge. Running `claude mcp add` itself is not tested in
 CI (no Claude Code there).
 
+## No sign-out, `credstore grant` (M9)
+
+Two setup steps came from the design, not the installer: signing out so the new groups
+apply, and granting the service account access to each project folder by hand.
+
+**The users file.** The installer writes the user it adds to the groups into a *users
+file* next to the policy (`/etc/credstore/users`, `%ProgramData%\credstore\users`; one
+account name per line, `#` comments; root/SYSTEM-owned like the policy). At startup the
+daemon reads it and allows those accounts on both endpoints in addition to the groups'
+members. Changes need a service restart (the installer restarts it).
+
+- **Windows.** Each listed account's SID gets its own entry in the pipe DACL (same
+  rights as the group's), and `authorize` accepts the SID if the impersonation token is
+  in the group *or* the SID is listed. A user entry applies at once; a group only reaches
+  a token at the next logon. Unknown names are logged and skipped.
+- **Linux, macOS.** `authorize` already checked the group in the account database
+  (`getgrnam`), which changes immediately; what blocked a session that predates the
+  group was the socket file's 0660 group permission. With listed users the sockets are
+  **0666**, and the daemon's check (SO_PEERCRED, at accept, before anything is read) is
+  the only gate. Without a users file they stay 0660. **Deviation from spec 8.1**, which
+  relies on the socket's group permission as well: the daemon's own check was always
+  the authoritative one, but there is no longer a kernel-level first filter, so any
+  local user can open a connection that the daemon then closes.
+- `doctor` reports "in the group, but this session predates it" as info, not a failure;
+  the endpoint checks show whether the daemon let the user in.
+
+**`credstore grant [DIR]`** (default: the current folder) gives the service account
+read/write access to a folder the user owns, without admin rights. It prints the exact
+commands, asks (or `--yes`), and runs them as the user (`credstore-os::grant`):
+
+| OS | Commands |
+| --- | --- |
+| Windows | `icacls DIR /grant "NT SERVICE\credstore:(OI)(CI)M"`; services bypass traverse checks, so parents need nothing |
+| Linux | `setfacl -R -m u:credstore:rwX DIR`, a default ACL on each directory in it (new files), and `u:credstore:x` (traverse only) on each parent the user owns, such as the 0750 home |
+| macOS | `chmod -R +a "_credstore allow ...,file_inherit,directory_inherit" DIR`, and `_credstore allow search` on each parent the user owns |
+
+The `.deb`/`.rpm` depend on `acl` for `setfacl`. In dev mode `grant` does nothing, since
+commands run as the user.
+
+**The daemon names the fix.** When a run's folder does not exist or the daemon cannot
+open it, the denial (in installed mode) says so and gives the `credstore grant` command,
+instead of the command failing later inside the sandbox.
+
+**Linux unit.** `ProtectHome=yes` (spec 8) hid `/home` from the daemon and its commands
+entirely, so no grant could work. The unit now has `ProtectHome=no` and
+`ReadWritePaths=-/home -/mnt -/srv` (the `-` skips missing paths), keeping
+`ProtectSystem=strict` for everything else. **Deviation from spec 8**: the credstore user
+can now see whatever file permissions allow under `/home` (other users' world-readable
+files, on systems with 0755 homes); its access to a user's projects comes only from the
+ACLs `grant` adds. `MemoryDenyWriteExecute=yes` is unchanged (it still breaks Node and
+Java; README).
+
+**Not solved here: per-user tools.** Approved commands run as the service account, which
+does not see tools installed only for the user (a Python under `AppData`, global npm
+packages, `~/.local/bin`, git credentials, SSH keys). Install such tools machine-wide, or
+give the service account access to them. Letting chosen commands run as the user would
+remove this, but weakens the model (the agent, as the same user, could then read the
+command's memory and environment); that is the owner's decision.
+
+**Tested** in CI's `installed` job: right after installing, `credstore list` runs in the
+CI shell, whose session predates the groups (Linux, macOS), and on Windows as the
+runner's own account added after logon. On Linux and macOS the smoke test then runs its
+approved commands in `~/credstore-smoke`, opened up with `credstore grant --yes` (no
+sudo); on Windows `credstore grant` replaces the hand-written icacls. Unit tests cover the
+users file and the grant plans.
+
 ## Stubbed per OS
 
 | Capability      | Linux                 | macOS                 | Windows               |

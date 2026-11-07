@@ -102,6 +102,12 @@ pub async fn setup(
         msg,
         "  credstore set NAME     add a secret (the value is prompted for)"
     )?;
+    if !opts.dev {
+        writeln!(
+            msg,
+            "  credstore grant DIR    let approved commands run in a project folder"
+        )?;
+    }
     writeln!(
         msg,
         "  credstore watch        keep open to approve agents' requests"

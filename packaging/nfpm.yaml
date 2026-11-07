@@ -21,6 +21,7 @@ license: MIT OR Apache-2.0
 
 depends:
   - systemd
+  - acl
 recommends:
   - bubblewrap
 

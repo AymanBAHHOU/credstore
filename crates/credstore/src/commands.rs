@@ -60,6 +60,49 @@ pub async fn create_vault(client: &Client, p: &dyn Prompt) -> anyhow::Result<boo
     }
 }
 
+/// `credstore grant DIR`: let the service account (which runs approved commands) read
+/// and write `dir`. Shows the OS commands, asks, then runs them as the user.
+pub fn grant(
+    dir: &Path,
+    yes: bool,
+    dev: bool,
+    p: &dyn Prompt,
+    msg: &mut dyn Write,
+) -> anyhow::Result<()> {
+    if dev {
+        writeln!(
+            msg,
+            "dev mode: approved commands run as you, so there is nothing to grant."
+        )?;
+        return Ok(());
+    }
+    let steps = credstore_os::grant::plan(dir)?;
+    writeln!(
+        msg,
+        "To let approved commands read and write {}, credstore will run (as you):",
+        dir.display()
+    )?;
+    for s in &steps {
+        writeln!(msg, "  {}", s.display())?;
+    }
+    if !yes {
+        if !p.has_terminal() {
+            bail!("`credstore grant` asks first and needs a terminal; or pass --yes");
+        }
+        let answer = p.line("Go ahead? [Y/n] ")?;
+        if !matches!(
+            answer.trim().to_ascii_lowercase().as_str(),
+            "" | "y" | "yes"
+        ) {
+            writeln!(msg, "Nothing changed.")?;
+            return Ok(());
+        }
+    }
+    credstore_os::grant::apply(&steps)?;
+    writeln!(msg, "Done.")?;
+    Ok(())
+}
+
 /// How to connect an agent, printed by `init` and the installers.
 pub const MCP_HINT: &str = "Register the MCP server with Claude Code:
   claude mcp add credstore -- credstore mcp            (installed)

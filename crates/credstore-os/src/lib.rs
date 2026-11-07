@@ -15,6 +15,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 pub mod exec;
 pub mod fs;
+pub mod grant;
 mod paths;
 mod platform;
 pub mod probe;
@@ -109,6 +110,11 @@ pub trait Paths {
         self.data_dir().join("index.json")
     }
     fn policy_file(&self) -> &Path;
+    /// Accounts the installer allows on both endpoints directly (installed mode), next to
+    /// the policy and protected like it.
+    fn users_file(&self) -> PathBuf {
+        self.policy_file().with_file_name("users")
+    }
     fn audit_log(&self) -> &Path;
     /// Per-run directories for `file` injection live under here. Swept on startup.
     fn run_dir(&self) -> &Path;
@@ -125,8 +131,49 @@ pub enum EndpointAccess {
     /// Only the user running the daemon (dev mode).
     SameUser,
     /// Members of this local group (installed mode: `credstore-agents` /
-    /// `credstore-approvers`).
-    Group(String),
+    /// `credstore-approvers`), checked in the account database, plus `users` by name.
+    ///
+    /// `users` come from the installer's users file. They are let in without depending on
+    /// the group reaching their logon session, which only happens at the next logon.
+    Group { group: String, users: Vec<String> },
+}
+
+/// Accounts listed in the installer's users file (see [`Paths::users_file`]): one name
+/// per line; blank lines and `#` comments are ignored. A missing file is an empty list.
+pub fn read_users_file(path: &Path) -> OsResult<Vec<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(parse_users(&text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn parse_users(text: &str) -> Vec<String> {
+    let mut users: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let name = line.split('#').next().unwrap_or("").trim();
+        if !name.is_empty() && !users.iter().any(|u| u.eq_ignore_ascii_case(name)) {
+            users.push(name.to_owned());
+        }
+    }
+    users
+}
+
+#[cfg(test)]
+mod users_file_tests {
+    use super::*;
+
+    #[test]
+    fn users_file_lines_comments_and_duplicates() {
+        let text = "# written by the installer\nalice\n\n  MYPC\\bob  # the approver\nALICE\n";
+        assert_eq!(parse_users(text), ["alice", r"MYPC\bob"]);
+    }
+
+    #[test]
+    fn missing_users_file_is_empty() {
+        let p = std::env::temp_dir().join("credstore-no-such-users-file");
+        assert!(read_users_file(&p).unwrap().is_empty());
+    }
 }
 
 /// Identity of the process on the other end of a connection.

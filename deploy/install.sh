@@ -214,6 +214,21 @@ else
     install -o root -g "$svc_group" -m 0640 "$here/policy.toml" /etc/credstore/policy.toml
 fi
 
+if [ -n "$human" ]; then
+    # The daemon lets accounts listed here in directly, so the user need not log out
+    # and back in for the new groups to apply (M9).
+    users=/etc/credstore/users
+    if [ ! -e "$users" ]; then
+        {
+            echo "# Accounts allowed on the credstore endpoints without a new login,"
+            echo "# one per line. Written by the installer; restart credstored after editing."
+        } >"$users"
+    fi
+    grep -qx "$human" "$users" || echo "$human" >>"$users"
+    chown "root:$svc_group" "$users"
+    chmod 0640 "$users"
+fi
+
 say "service"
 if [ "$os" = Linux ]; then
     # The unit names /usr/local/bin; point it at --bin.
@@ -236,12 +251,8 @@ cat <<EOF
 credstore is installed and running as $svc_user.
 
 Next, as ${human:-your normal user}:
-  1. Log out and back in (or open a new login session) so the credstore-agents and
-     credstore-approvers groups apply.
-  2. credstore setup         create the vault and connect Claude Code (asks first)
-  3. credstore set NAME      add a secret (the value is prompted for)
+  1. credstore setup         create the vault and connect Claude Code (asks first)
+  2. credstore set NAME      add a secret (the value is prompted for)
+  3. credstore grant DIR     let approved commands run in a project folder
   4. credstore doctor        check the install
-
-Approved commands run as $svc_user: give it access to the project folders it should
-run in (see README, "Installed mode").
 EOF

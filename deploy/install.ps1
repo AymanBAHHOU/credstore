@@ -138,6 +138,19 @@ Invoke-Native icacls.exe @(
     '/grant:r', '*S-1-5-32-544:(OI)(CI)F',
     '/grant:r', "${Account}:(OI)(CI)F"
 )
+if ($User) {
+    # The daemon lets accounts listed here in directly: group membership reaches a token
+    # only at logon, a per-user pipe ACE applies at once (M9).
+    $users = Join-Path $DataDir 'users'
+    if (-not (Test-Path $users)) {
+        Set-Content -Path $users -Encoding ascii -Value @(
+            '# Accounts allowed on the credstore endpoints without a new logon,',
+            '# one per line. Written by the installer; restart the service after editing.'
+        )
+    }
+    $listed = Get-Content $users | ForEach-Object { $_.Trim() }
+    if ($listed -notcontains $User) { Add-Content -Path $users -Encoding ascii -Value $User }
+}
 $policy = Join-Path $DataDir 'policy.toml'
 if (Test-Path $policy) {
     Write-Host '    keeping the existing policy'
@@ -163,12 +176,8 @@ Write-Host @"
 credstore is installed and running as $Account.
 
 Next, as $User (in a new, non-elevated terminal):
-  1. Sign out and back in so the credstore-agents and credstore-approvers groups apply.
-  2. credstore setup         create the vault and connect Claude Code (asks first)
-  3. credstore set NAME      add a secret (the value is prompted for)
+  1. credstore setup         create the vault and connect Claude Code (asks first)
+  2. credstore set NAME      add a secret (the value is prompted for)
+  3. credstore grant DIR     let approved commands run in a project folder
   4. credstore doctor        check the install
-
-Approved commands run as ${Account}: give it access to the project folders it should
-run in, for example:
-  icacls C:\path\to\project /grant "${Account}:(OI)(CI)M"
 "@

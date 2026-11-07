@@ -162,10 +162,24 @@ pub(crate) async fn bind_all(
     use credstore_os::{EndpointAccess, EndpointKind, Mode, Paths, AGENTS_GROUP, APPROVERS_GROUP};
     let (agent_access, approver_access) = match state.mode() {
         Mode::Dev => (EndpointAccess::SameUser, EndpointAccess::SameUser),
-        Mode::Installed => (
-            EndpointAccess::Group(AGENTS_GROUP.into()),
-            EndpointAccess::Group(APPROVERS_GROUP.into()),
-        ),
+        Mode::Installed => {
+            // The installer lists the human here so they need not log out first (M9).
+            let file = state.platform.users_file();
+            let users = credstore_os::read_users_file(&file).unwrap_or_else(|e| {
+                tracing::warn!(path = %file.display(), error = %e, "cannot read the users file");
+                Vec::new()
+            });
+            (
+                EndpointAccess::Group {
+                    group: AGENTS_GROUP.into(),
+                    users: users.clone(),
+                },
+                EndpointAccess::Group {
+                    group: APPROVERS_GROUP.into(),
+                    users,
+                },
+            )
+        }
     };
     let p = &state.platform;
     let agent = p

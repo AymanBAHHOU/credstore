@@ -34,8 +34,8 @@ The full design is in [SPEC.md](SPEC.md); where the code differs from it, and wh
 | Debian, Ubuntu, WSL2 | `credstore_VERSION_amd64.deb` | `sudo apt install ./credstore_VERSION_amd64.deb` |
 | Fedora, RHEL | `credstore-VERSION.x86_64.rpm` | `sudo dnf install ./credstore-VERSION.x86_64.rpm` |
 
-The package installs the service and adds the user who installed it to the credstore
-groups. Then **sign out and back in** (the groups apply at logon) and run:
+The package installs the service and allows the user who installed it (no need to sign
+out first). Then run, as yourself:
 
 ```bash
 credstore setup
@@ -76,11 +76,12 @@ permissions below, write a starter policy, and start the service. They are safe 
 re-run. `--uninstall` / `-Uninstall` removes the service and binaries but keeps the
 vault, policy and audit log.
 
-Then **log out and back in** so the new groups apply, and:
+Then, as yourself:
 
 ```bash
-credstore init            # create the vault, set the passphrase (asked twice)
+credstore setup           # create the vault, connect Claude Code (asks first)
 credstore set STRIPE_KEY  # the value is prompted for, never taken from argv
+credstore grant ~/code/app  # let approved commands run in a project folder
 credstore doctor          # check the install
 ```
 
@@ -103,27 +104,33 @@ trying credstore out, not for real secrets.
 
 ### Installed mode: where commands run
 
-Approved commands run as the **service account**, not as you. They do not see your home
-directory's config (ssh keys, git config), and they need access to the project folders
-they run in:
+Approved commands run as the **service account**, not as you. They need access to the
+project folders they run in. Give it with:
 
-- **Linux.** The unit uses `ProtectHome=yes` and `ProtectSystem=strict` (spec 8), which
-  hide `/home` and make the system read-only for the daemon and its commands. To run in
-  projects under `/home`, add a drop-in with `sudo systemctl edit credstored`:
+```bash
+credstore grant /path/to/project    # default: the current folder
+```
 
-  ```ini
-  [Service]
-  ProtectHome=no
-  ReadWritePaths=/home/you/projects
-  ```
+It shows the commands it will run (`icacls` on Windows, `setfacl` on Linux, `chmod +a`
+on macOS), asks, and runs them as you: you own the folder, so no admin rights are
+needed. If an agent asks to run somewhere the service cannot open, the request is denied
+with the `credstore grant` command to run.
 
-  and give the account access: `setfacl -R -m u:credstore:rwX /home/you/projects` (and
-  `setfacl -m u:credstore:x /home/you` to let it reach the folder).
-  The unit also sets `MemoryDenyWriteExecute=yes`, which the commands inherit: JIT
-  runtimes (Node.js, Java, some Python builds) fail under it. Turn it off in the same
-  drop-in (`MemoryDenyWriteExecute=no`) if you need them.
-- **macOS**: `chmod +a "_credstore allow list,search,readattr,read,write,add_file,add_subdirectory,file_inherit,directory_inherit" ~/projects/app`
-- **Windows**: `icacls C:\path\to\project /grant "NT SERVICE\credstore:(OI)(CI)M"`
+The service account does not see your home directory's config (SSH keys, git
+credentials) or tools installed only for you (a Python under `AppData`, global npm
+packages, `~/.local/bin`). Install tools the agent should run machine-wide.
+
+On Linux the unit also sets `MemoryDenyWriteExecute=yes`, which the commands inherit:
+JIT runtimes (Node.js, Java, some Python builds) fail under it. To allow them, add a
+drop-in with `sudo systemctl edit credstored`:
+
+```ini
+[Service]
+MemoryDenyWriteExecute=no
+```
+
+On macOS, folders under `~/Desktop`, `~/Documents` and `~/Downloads` are also protected by
+macOS privacy controls; keep projects elsewhere (for example `~/code`).
 
 ## Use with Claude Code
 

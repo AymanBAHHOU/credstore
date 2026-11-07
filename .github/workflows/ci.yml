@@ -86,11 +86,15 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           sudo bash ./deploy/install.sh --user "$USER"
-          if [ "$RUNNER_OS" = Linux ]; then smoke=/opt/credstore-smoke; else smoke=/usr/local/credstore-smoke; fi
-          sudo install -d -m 0755 "$smoke"
-          sudo install -m 0755 target/debug/credstore-adversary "$smoke/"
-          # sudo re-reads group membership, so the new groups apply.
-          sudo -u "$USER" env CREDSTORE_SMOKE_DIR="$smoke" "$(cat smoke-test-path.txt)" --ignored --nocapture
+          # M9: this shell's session predates the new groups; the users file lets it in.
+          credstore list
+          # M9: a project folder in the home directory, opened up with `credstore grant`
+          # (no sudo), is where the approved commands run.
+          export CREDSTORE_SMOKE_DIR="$HOME/credstore-smoke"
+          mkdir -p "$CREDSTORE_SMOKE_DIR"
+          cp target/debug/credstore-adversary "$CREDSTORE_SMOKE_DIR/"
+          credstore grant --yes "$CREDSTORE_SMOKE_DIR"
+          "$(cat smoke-test-path.txt)" --ignored --nocapture
       - name: Service log (Linux, macOS)
         if: failure() && runner.os != 'Windows'
         run: |
@@ -113,7 +117,10 @@ jobs:
           $smoke = 'C:\credstore-smoke'
           New-Item -ItemType Directory -Force $smoke | Out-Null
           Copy-Item target\debug\credstore-adversary.exe, (Get-Content smoke-test-path.txt) $smoke
-          icacls $smoke /grant 'NT SERVICE\credstore:(OI)(CI)RX' /grant 'cssmoke:(OI)(CI)M' | Out-Null
+          icacls $smoke /grant 'cssmoke:(OI)(CI)M' | Out-Null
+          # M9: the folder's owner opens it up for the service, without icacls by hand.
+          & "$env:ProgramFiles\credstore\credstore.exe" grant --yes $smoke
+          if ($LASTEXITCODE -ne 0) { throw 'credstore grant failed' }
           $test = Join-Path $smoke (Split-Path -Leaf (Get-Content smoke-test-path.txt))
           Start-Service seclogon -ErrorAction SilentlyContinue
           $cred = New-Object System.Management.Automation.PSCredential("$env:COMPUTERNAME\cssmoke", $pw)
@@ -122,6 +129,15 @@ jobs:
             -RedirectStandardOutput "$smoke\out.txt" -RedirectStandardError "$smoke\err.txt"
           Get-Content "$smoke\out.txt", "$smoke\err.txt"
           if ($p.ExitCode -ne 0) { throw "smoke test failed ($($p.ExitCode))" }
+      - name: No new logon needed (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          # M9: add the runner's own account, whose logon predates the groups. The
+          # users file gives it a pipe ACE of its own, so it connects at once.
+          .\deploy\install.ps1 -User "$env:USERDOMAIN\$env:USERNAME"
+          & "$env:ProgramFiles\credstore\credstore.exe" list
+          if ($LASTEXITCODE -ne 0) { throw 'credstore list failed for a user added after logon' }
       - name: Service log (Windows)
         if: failure() && runner.os == 'Windows'
         shell: powershell

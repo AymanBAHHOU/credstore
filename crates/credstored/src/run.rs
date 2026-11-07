@@ -134,12 +134,23 @@ impl State {
             }
         }
 
-        let cwd = exec::canonical_dir(std::path::Path::new(&req.cwd)).ok_or_else(|| {
-            error(
-                ErrorCode::BadRequest,
-                "cwd does not exist or is not a directory",
-            )
-        })?;
+        // The daemon (the service account, in installed mode) must be able to open the
+        // folder; say how to fix it rather than failing later inside the command.
+        let cwd = match exec::canonical_dir(std::path::Path::new(&req.cwd)) {
+            Some(c) if std::fs::read_dir(&c).is_ok() => c,
+            _ => {
+                let msg = match self.mode() {
+                    credstore_os::Mode::Installed => format!(
+                        "credstored cannot open {}: it does not exist, or the credstore \
+                         service has no access to it. If it is a project folder, its owner \
+                         can run `credstore grant \"{}\"`, then retry",
+                        req.cwd, req.cwd
+                    ),
+                    credstore_os::Mode::Dev => "cwd does not exist or is not a directory".into(),
+                };
+                return Err(error(ErrorCode::BadRequest, msg));
+            }
+        };
 
         let program = match &req.argv {
             Some(argv) => Some(

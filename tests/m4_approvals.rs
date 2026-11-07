@@ -395,7 +395,15 @@ async fn a_request_is_cancelled_when_its_agent_disconnects() {
     let _ = task.await;
     // The human no longer sees it, and the audit log says why.
     d.wait_pending(0).await;
-    let denied = d.records("denied");
+    // The audit record is written just after the request leaves the queue.
+    let mut denied = d.records("denied");
+    for _ in 0..100 {
+        if !denied.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        denied = d.records("denied");
+    }
     assert_eq!(denied.last().unwrap()["via"], "disconnect", "{denied:?}");
     assert!(d.records("run_started").is_empty());
     d.stop().await;

@@ -31,6 +31,7 @@ pub struct PipeListener {
     access: EndpointAccess,
     own_sid: String,
     group_sid: Option<String>,
+    user_sids: Vec<String>,
 }
 
 enum Conn {
@@ -43,22 +44,36 @@ pub struct PipeStream {
     access: EndpointAccess,
     own_sid: String,
     group_sid: Option<String>,
+    user_sids: Vec<String>,
     /// Client side only: who the server is.
     server_peer: Option<PeerInfo>,
 }
 
 pub async fn bind(endpoint: &Endpoint, access: &EndpointAccess) -> OsResult<PipeListener> {
     let own_sid = win::current_user_sid()?;
+    let mut user_sids = Vec::new();
     let (sddl, group_sid) = match access {
         // Owner is set explicitly so clients can verify it.
         EndpointAccess::SameUser => (format!("O:{own_sid}D:P(A;;GA;;;{own_sid})"), None),
-        EndpointAccess::Group(g) => {
+        EndpointAccess::Group { group: g, users } => {
             let gsid = win::lookup_account_sid(g)
                 .map_err(|e| OsError::unavailable(format!("group {g}: {e}")))?;
-            (
-                format!("O:{own_sid}D:P(A;;GA;;;{own_sid})(A;;{CLIENT_RIGHTS};;;{gsid})"),
-                Some(gsid),
-            )
+            let mut sddl =
+                format!("O:{own_sid}D:P(A;;GA;;;{own_sid})(A;;{CLIENT_RIGHTS};;;{gsid})");
+            // Listed users get their own entry: a group added after logon is not in the
+            // user's token until the next logon, a user entry applies at once.
+            for u in users {
+                match win::lookup_account_sid(u) {
+                    Ok(sid) => {
+                        sddl.push_str(&format!("(A;;{CLIENT_RIGHTS};;;{sid})"));
+                        user_sids.push(sid);
+                    }
+                    Err(e) => {
+                        tracing::warn!(user = %u, error = %e, "users file: unknown account, skipped")
+                    }
+                }
+            }
+            (sddl, Some(gsid))
         }
     };
     // first_pipe_instance: fail if anyone (an impostor, or another daemon) already owns
@@ -83,6 +98,7 @@ pub async fn bind(endpoint: &Endpoint, access: &EndpointAccess) -> OsResult<Pipe
         access: access.clone(),
         own_sid,
         group_sid,
+        user_sids,
     })
 }
 
@@ -103,6 +119,7 @@ impl IpcListener for PipeListener {
             access: self.access.clone(),
             own_sid: self.own_sid.clone(),
             group_sid: self.group_sid.clone(),
+            user_sids: self.user_sids.clone(),
             server_peer: None,
         })
     }
@@ -148,6 +165,7 @@ pub async fn connect(endpoint: &Endpoint, mode: Mode) -> OsResult<PipeStream> {
         access: EndpointAccess::SameUser,
         own_sid: String::new(),
         group_sid: None,
+        user_sids: Vec::new(),
         server_peer: Some(PeerInfo {
             sid: Some(owner),
             pid: server_pid,
@@ -182,7 +200,8 @@ impl PeerIdentity for PipeStream {
 }
 
 impl IpcStream for PipeStream {
-    /// SID is the check. Dev: the daemon's own user. Installed: a member of the group.
+    /// SID is the check. Dev: the daemon's own user. Installed: a member of the group, or
+    /// a listed user.
     /// Call after reading the first frame (see `pipe_client_identity`).
     fn authorize(&self) -> OsResult<PeerInfo> {
         let Conn::Server(s) = &self.conn else {
@@ -192,7 +211,7 @@ impl IpcStream for PipeStream {
         let sid = peer.sid.clone().unwrap_or_default();
         let ok = match &self.access {
             EndpointAccess::SameUser => sid == self.own_sid,
-            EndpointAccess::Group(_) => member,
+            EndpointAccess::Group { .. } => member || self.user_sids.contains(&sid),
         };
         if ok {
             Ok(peer)

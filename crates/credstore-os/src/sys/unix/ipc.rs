@@ -50,10 +50,14 @@ pub async fn bind(endpoint: &Endpoint, access: &EndpointAccess) -> OsResult<Unix
         EndpointAccess::SameUser => {
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
         }
-        EndpointAccess::Group(name) => {
-            let group = lookup_group(name)?;
+        EndpointAccess::Group { group, users } => {
+            let group = lookup_group(group)?;
             nix::unistd::chown(&path, None, Some(group.gid)).map_err(errno)?;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660))?;
+            // With listed users the socket must be connectable without the group in the
+            // peer's credentials (new members only get it at their next login), so it is
+            // 0666 and `authorize` (SO_PEERCRED, before anything is read) is the check.
+            let mode = if users.is_empty() { 0o660 } else { 0o666 };
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))?;
         }
     }
     Ok(UnixIpcListener {
@@ -70,7 +74,7 @@ fn check_socket_dir(dir: &Path, access: &EndpointAccess) -> OsResult<()> {
     let mode = meta.mode() & 0o777;
     let open_bits = match access {
         EndpointAccess::SameUser => 0o077,
-        EndpointAccess::Group(_) => 0o002,
+        EndpointAccess::Group { .. } => 0o002,
     };
     if !meta.is_dir() || meta.uid() != Uid::effective().as_raw() || mode & open_bits != 0 {
         return Err(OsError::Denied(format!(
@@ -158,7 +162,9 @@ fn peer_of(stream: &UnixStream) -> OsResult<PeerInfo> {
     })
 }
 
-/// UID is the check. Dev: the daemon's own user. Installed: a member of the group.
+/// UID is the check. Dev: the daemon's own user. Installed: a member of the group in
+/// the account database (not the peer's own group list, which only changes at login), or
+/// a listed user.
 fn authorize(peer: &PeerInfo, access: &EndpointAccess) -> OsResult<()> {
     let uid = peer
         .uid
@@ -175,12 +181,15 @@ fn authorize(peer: &PeerInfo, access: &EndpointAccess) -> OsResult<()> {
                 )))
             }
         }
-        EndpointAccess::Group(name) => {
+        EndpointAccess::Group { group: name, users } => {
             let group = lookup_group(name)?;
             let user = User::from_uid(Uid::from_raw(uid))
                 .map_err(errno)?
                 .ok_or_else(|| OsError::Denied(format!("peer uid {uid} has no user entry")))?;
-            if user.gid == group.gid || group.mem.iter().any(|m| m == &user.name) {
+            if user.gid == group.gid
+                || group.mem.iter().any(|m| m == &user.name)
+                || users.iter().any(|u| u == &user.name)
+            {
                 Ok(())
             } else {
                 Err(OsError::Denied(format!(

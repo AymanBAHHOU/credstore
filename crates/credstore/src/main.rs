@@ -50,6 +50,14 @@ enum Command {
     List,
     /// Remove a secret.
     Rm { name: String },
+    /// Let approved commands run in a folder you own (grants the service account access).
+    Grant {
+        /// The folder (default: the current one).
+        dir: Option<std::path::PathBuf>,
+        /// Do it without asking.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Run a command with secrets, approved in place with the passphrase.
     Run {
         #[arg(short = 's', long = "secrets", value_delimiter = ',', required = true)]
@@ -140,6 +148,13 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
         }
         Command::List => commands::list(&client, &mut out, &mut msg).await,
         Command::Rm { name } => commands::rm(&client, &name, &prompt, &mut msg).await,
+        Command::Grant { dir, yes } => {
+            let dir = match dir {
+                Some(d) => d,
+                None => std::env::current_dir()?,
+            };
+            commands::grant(&dir, yes, cli.dev, &prompt, &mut msg)
+        }
         Command::Lock => commands::lock(&client, &prompt, &mut msg).await,
         Command::Status => commands::status(&client, &prompt, &mut out).await,
         Command::Reload => commands::reload(&client, &prompt, &mut msg).await,

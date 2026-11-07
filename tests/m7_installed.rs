@@ -117,8 +117,10 @@ async fn installed_daemon_end_to_end() {
         assert!(c[0].detail.contains("cannot read or write"), "{text}");
     }
     assert_eq!(report.about("service")[0].level, Level::Ok, "{text}");
+    // Info: listed in the group, but this session predates it (M9: the users file lets
+    // the user in anyway, which the agent and approver checks above prove).
     for group in report.about("groups") {
-        assert_eq!(group.level, Level::Ok, "{text}");
+        assert!(matches!(group.level, Level::Ok | Level::Info), "{text}");
     }
     let memory = report.about("memory");
     assert!(

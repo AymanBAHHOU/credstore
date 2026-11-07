@@ -2,10 +2,10 @@
 # /etc/systemd/system/credstored.service.
 #
 # Commands approved through credstore run as the `credstore` user inside this unit, so
-# they see the filesystem the way this unit does: ProtectHome=yes hides /home, /root and
-# /run/user, and ProtectSystem=strict makes everything outside ReadWritePaths read-only.
-# To run commands in projects under /home, add a drop-in (see README "Installed mode on
-# Linux") rather than editing this file.
+# they see the filesystem the way this unit does. ProtectSystem=strict makes everything
+# outside ReadWritePaths read-only. /home, /mnt (WSL drives) and /srv stay writable as far
+# as file permissions allow: `credstore grant DIR` gives the credstore user an ACL on a
+# project folder (docs/DESIGN.md, M9). The spec's ProtectHome=yes would hide /home.
 [Unit]
 Description=credstore secret broker
 Documentation=https://github.com/AymanBAHHOU/credstore
@@ -20,8 +20,9 @@ ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=2s
 
-# /run/credstore holds the sockets (0660, groups credstore-agents / credstore-approvers);
-# the directory itself is 0755 so group members can reach them.
+# /run/credstore holds the sockets (credstore-agents / credstore-approvers; 0666 when the
+# installer listed users, with the daemon checking each peer's uid); the directory
+# itself is 0755 so clients can reach them.
 RuntimeDirectory=credstore
 RuntimeDirectoryMode=0755
 StateDirectory=credstore
@@ -33,9 +34,10 @@ UMask=0077
 # Hardening from spec 8.
 NoNewPrivileges=yes
 ProtectSystem=strict
-ProtectHome=yes
+ProtectHome=no
 PrivateTmp=yes
 ReadWritePaths=/var/lib/credstore /var/log/credstore /run/credstore
+ReadWritePaths=-/home -/mnt -/srv
 # AF_NETLINK is not in the spec's list: bubblewrap needs it to bring up loopback in the
 # network namespace of a run with network = "deny" (docs/DESIGN.md).
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
