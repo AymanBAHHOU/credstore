@@ -855,6 +855,15 @@ secret" ends on the Secrets page with the form open; "Finish later" ends on Appr
 Either way the guide does not open by itself again (a flag in the page's local
 storage); Health > "Open the setup guide" reopens it. An existing setup never sees it.
 
+**Bug found on the first real run (2026-11-07):** "Connect Claude Code" in the app
+registered the app itself (`credstore-app.exe mcp`), because registration used the
+running program. Claude Code then started the app window, which never answers MCP, and
+gave up after 30 s ("CONNECT_TIMEOUT"). Registration now always uses the credstore CLI
+(`setup::cli_path`: the running program if it is the CLI, else the `credstore` beside it,
+else the usual install places, else `credstore` on PATH). An entry that points at any
+other program counts as not connected (`ClaudeState::wrong_command`, shown on the page),
+and connecting removes it first (`claude mcp remove`) and adds the right one.
+
 With the app installed, the MSI no longer adds the "credstore setup" Start menu entry,
 and its finish page points to the app; without the app it is as before. `credstore
 setup` itself is unchanged for the terminal and Linux. Checked in a browser with a

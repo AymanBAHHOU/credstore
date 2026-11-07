@@ -31,7 +31,7 @@ pub struct ClaudeCode {
     pub home: PathBuf,
     /// The `claude` executable, if it is on `PATH`.
     pub exe: Option<PathBuf>,
-    /// The credstore binary to register (normally this one).
+    /// The credstore CLI to register (see [`cli_path`]).
     pub credstore: PathBuf,
 }
 
@@ -42,7 +42,9 @@ impl ClaudeCode {
         let exe =
             credstore_os::exec::resolve_program("claude", &cwd, &credstore_os::exec::search_path())
                 .ok();
-        let credstore = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("credstore"));
+        let credstore = std::env::current_exe()
+            .map(|me| cli_path(&me))
+            .unwrap_or_else(|_| PathBuf::from("credstore"));
         Some(Self {
             home,
             exe,
@@ -53,6 +55,43 @@ impl ClaudeCode {
     fn settings(&self) -> PathBuf {
         self.home.join(".claude").join("settings.json")
     }
+}
+
+/// The credstore CLI to register with Claude Code, given the running program: itself
+/// when it is the CLI (`credstore setup`), otherwise the `credstore` installed beside it
+/// (the desktop app is installed next to the CLI on Windows and Linux), then the usual
+/// install places, then plain `credstore` for Claude Code to find on its PATH.
+///
+/// Registering the desktop app instead (as the app did before 2026-11-07) starts the app
+/// window, which never answers MCP, so Claude Code times out.
+pub fn cli_path(current: &Path) -> PathBuf {
+    if is_cli(current) {
+        return current.to_path_buf();
+    }
+    let name = format!("credstore{}", std::env::consts::EXE_SUFFIX);
+    let beside = current.with_file_name(&name);
+    if beside.is_file() {
+        return beside;
+    }
+    let installed: &[&str] = if cfg!(windows) {
+        &[]
+    } else {
+        &["/usr/local/bin/credstore", "/usr/bin/credstore"]
+    };
+    installed
+        .iter()
+        .map(PathBuf::from)
+        .find(|p| p.is_file())
+        .unwrap_or_else(|| PathBuf::from(name))
+}
+
+/// The program is the credstore CLI (`credstore`, `credstore.exe`), not the app or
+/// anything else.
+fn is_cli(program: &Path) -> bool {
+    program
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| s.eq_ignore_ascii_case("credstore"))
 }
 
 pub async fn setup(
@@ -121,8 +160,12 @@ pub async fn setup(
 pub struct ClaudeState {
     /// `claude` is on PATH.
     pub found: bool,
-    /// credstore is registered at user scope.
+    /// credstore is registered at user scope, with the credstore CLI.
     pub registered: bool,
+    /// credstore is registered at user scope with another program (for example the
+    /// desktop app, which cannot answer MCP). Connecting replaces it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wrong_command: Option<String>,
     /// Deny rules that are not in `~/.claude/settings.json` yet.
     pub missing_rules: Vec<String>,
     pub settings_file: String,
@@ -134,6 +177,7 @@ impl ClaudeCode {
         Ok(ClaudeState {
             found: self.exe.is_some(),
             registered: user_scope_registered(&self.home),
+            wrong_command: user_scope_command(&self.home).filter(|c| !is_cli(Path::new(c))),
             missing_rules: deny_rules()
                 .into_iter()
                 .filter(|r| !has_deny_rule(&settings, r))
@@ -142,9 +186,22 @@ impl ClaudeCode {
         })
     }
 
-    /// `claude mcp add --scope user credstore -- <credstore> [--dev] mcp`.
+    /// `claude mcp add --scope user credstore -- <credstore> [--dev] mcp`. An entry that
+    /// is already there (with another program) is removed first.
     pub fn register(&self, dev: bool) -> Result<()> {
         let exe = self.exe.as_ref().context("`claude` is not on PATH")?;
+        if user_scope_command(&self.home).is_some() {
+            let out = Command::new(exe)
+                .args(["mcp", "remove", "--scope", "user", "credstore"])
+                .output()
+                .with_context(|| format!("running {}", exe.display()))?;
+            if !out.status.success() {
+                bail!(
+                    "claude mcp remove failed: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                );
+            }
+        }
         let mut cmd = Command::new(exe);
         cmd.args(["mcp", "add", "--scope", "user", "credstore", "--"])
             .arg(&self.credstore);
@@ -250,10 +307,18 @@ fn confirm(p: &dyn Prompt, yes: bool, question: &str) -> Result<bool> {
 
 /// Whether `~/.claude.json` registers a `credstore` MCP server at user scope.
 pub fn user_scope_registered(home: &Path) -> bool {
-    std::fs::read_to_string(home.join(".claude.json"))
-        .ok()
-        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-        .is_some_and(|j| j["mcpServers"]["credstore"].is_object())
+    user_scope_command(home).is_some_and(|c| is_cli(Path::new(&c)))
+}
+
+/// The program credstore is registered with at user scope, if it is registered there
+/// (an entry without a command counts, as an empty string).
+fn user_scope_command(home: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(home.join(".claude.json")).ok()?;
+    let j = serde_json::from_str::<Value>(&text).ok()?;
+    let entry = &j["mcpServers"]["credstore"];
+    entry
+        .is_object()
+        .then(|| entry["command"].as_str().unwrap_or("").to_owned())
 }
 
 /// The deny rules for this OS, in Claude Code's syntax (`//` = absolute, `~/` = home).
@@ -415,6 +480,36 @@ mod tests {
         )
         .unwrap();
         assert!(user_scope_registered(&home));
+        // What the app registered before the fix: itself, which never answers MCP.
+        std::fs::write(
+            home.join(".claude.json"),
+            r#"{"mcpServers":{"credstore":{"type":"stdio","command":"C:\\Program Files\\credstore\\credstore-app.exe","args":["mcp"]}}}"#,
+        )
+        .unwrap();
+        assert!(!user_scope_registered(&home), "the app is not the CLI");
+        assert_eq!(
+            user_scope_command(&home).as_deref(),
+            Some(r"C:\Program Files\credstore\credstore-app.exe")
+        );
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn the_cli_is_registered_even_from_the_app() {
+        let dir = std::env::temp_dir().join(format!("cs-cli-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = std::env::consts::EXE_SUFFIX;
+        let cli = dir.join(format!("credstore{exe}"));
+        let app = dir.join(format!("credstore-app{exe}"));
+        // The CLI registers itself.
+        assert_eq!(cli_path(&cli), cli);
+        // The app registers the CLI installed beside it.
+        std::fs::write(&cli, b"").unwrap();
+        assert_eq!(cli_path(&app), cli);
+        // Without one beside it, never the app itself.
+        std::fs::remove_file(&cli).unwrap();
+        assert_ne!(cli_path(&app), app);
+        assert!(is_cli(&cli_path(&app)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

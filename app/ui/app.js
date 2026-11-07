@@ -827,7 +827,9 @@ async function refreshClaude() {
     }
     list.replaceChildren(
       checkItem(s.found ? "on" : "ring", "installed", s.found ? "Claude Code is installed." : "claude was not found on PATH. Install Claude Code, then come back."),
-      checkItem(s.registered ? "on" : "ring", "connected", s.registered ? "credstore is available to Claude Code in every folder." : "credstore is not connected to Claude Code yet."),
+      checkItem(s.registered ? "on" : "ring", "connected", s.registered ? "credstore is available to Claude Code in every folder."
+        : s.wrong_command ? `Registered with the wrong program (${s.wrong_command}), so Claude Code cannot connect. Connect fixes it.`
+        : "credstore is not connected to Claude Code yet."),
       checkItem(s.missing_rules.length ? "ring" : "on", "deny rules",
         s.missing_rules.length ? "Missing: " + s.missing_rules.join(", ") : ".env files and credstore's own files are blocked from reading."),
     );
@@ -1008,7 +1010,8 @@ function claudeStep() {
   return [
     el("p", { class: "help" }, "Makes credstore available to Claude Code in every folder, and stops Claude Code from reading .env files and credstore's own files."),
     el("ul", { class: "checks" },
-      checkItem(s.registered ? "on" : "ring", "connected", s.registered ? "credstore is available to Claude Code." : "Not yet."),
+      checkItem(s.registered ? "on" : "ring", "connected", s.registered ? "credstore is available to Claude Code."
+        : s.wrong_command ? "Registered with the wrong program; connecting fixes it." : "Not yet."),
       checkItem(s.missing_rules.length ? "ring" : "on", "deny rules", s.missing_rules.length ? "To add: " + s.missing_rules.join(", ") : "In place.")),
     el("div", { class: "step-acts" }, go, laterButton("claude")),
   ];
