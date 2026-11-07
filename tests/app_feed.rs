@@ -82,6 +82,14 @@ async fn the_feed_shows_activity_and_the_app_edits_the_policy() {
     let first = until(&mut rx, |v| v.policy.is_some()).await;
     let p = first.policy.as_ref().unwrap();
     assert!(p.editable, "dev mode can edit the policy");
+    // The app's view carries the trusted key list (empty here) whenever the vault is
+    // open, so the page can tell whether Windows Hello can confirm.
+    assert_eq!(
+        first.approval_keys.is_none(),
+        first.locked,
+        "{:?}",
+        first.approval_keys
+    );
     assert_eq!(p.session_idle_secs, 600);
     let rules = p.secrets.iter().find(|r| r.name == "API_KEY").unwrap();
     assert!(!rules.configured);

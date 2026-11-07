@@ -67,6 +67,9 @@ pub struct FeedView {
     pub policy: Option<PolicyInfo>,
     pub policy_error: Option<String>,
     pub locked: bool,
+    /// Ids of the approval keys the vault trusts; `None` while locked (see
+    /// [`Feed::approval_keys`]). The page compares [`Overview::hello_key_id`] with it.
+    pub approval_keys: Option<Vec<String>>,
 }
 
 fn printable_all(v: &mut [String]) {
@@ -108,6 +111,10 @@ impl FeedView {
             policy,
             policy_error: f.policy_error.map(|e| printable(&e)),
             locked: f.locked,
+            approval_keys: f.approval_keys.map(|mut k| {
+                printable_all(&mut k);
+                k
+            }),
         }
     }
 }
