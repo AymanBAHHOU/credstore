@@ -271,7 +271,9 @@ How:
   with `credstore grant`, and its own temp folder, with no network unless allowed. A
   run in another folder, or of a program installed per user (for example under
   `%LOCALAPPDATA%`), falls back to a Job Object, which hides no files and cannot block
-  the network; the approval screen says so, and `sandbox = "require"` denies it.
+  the network; the approval screen says so, and `sandbox = "require"` denies it. On
+  Windows Server, commands in the AppContainer cannot open `NUL` (`>NUL` fails with
+  "Access is denied"); Windows 10 and 11 are fine.
 - **Root, administrators, and anyone with debug privileges.** They can read any
   process's memory and any file. An agent running as an administrator (elevated, or with
   `SeDebugPrivilege` enabled) defeats the separate account. Run your agent as a normal

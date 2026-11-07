@@ -400,6 +400,11 @@ runner (`credstored::runner`):
     bin) are the usual reason for a program; spec 11 leaves that to the owner.
   - `CREDSTORE_FORCE_SANDBOX=job-object` forces the fallback (CI runs the adversarial
     suite both ways).
+  - **Known gap: `NUL` on Windows Server.** Windows Server (the CI runners) refuses the
+    `NUL` device to AppContainers, so `>NUL` and children started with null stdio fail
+    with "Access is denied". Windows 10 and 11 allow it. Changing the device's DACL is a
+    system security setting credstore does not touch; `tests/m12_appcontainer.rs`
+    records what each CI run sees.
 - `CREDSTORE_FORCE_SANDBOX=landlock|job-object|none` can only downgrade the sandbox. CI uses it to
   run the adversarial suite on each fallback.
 
