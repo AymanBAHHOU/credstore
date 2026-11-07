@@ -23,15 +23,17 @@ if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
     if ($LASTEXITCODE -ne 0) { throw 'installing WiX failed' }
     $env:PATH += ";$env:USERPROFILE\.dotnet\tools"
 }
-wix extension add --global "WixToolset.Util.wixext/$WixVersion"
-if ($LASTEXITCODE -ne 0) { throw 'adding the WiX util extension failed' }
+foreach ($ext in 'WixToolset.Util.wixext', 'WixToolset.UI.wixext') {
+    wix extension add --global "$ext/$WixVersion"
+    if ($LASTEXITCODE -ne 0) { throw "adding the WiX extension $ext failed" }
+}
 
 $withApp = if (Test-Path $AppExe) { '1' } else { '0' }
 Write-Host "desktop app included: $withApp"
 
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $msi = Join-Path $OutDir "credstore-$version-x64.msi"
-wix build -arch x64 -ext WixToolset.Util.wixext `
+wix build -arch x64 -ext WixToolset.Util.wixext -ext WixToolset.UI.wixext `
     -d "Version=$version" -d "BinDir=$BinDir" -d "DeployDir=$(Join-Path $root 'deploy')" `
     -d "WithApp=$withApp" -d "AppExe=$AppExe" `
     -o $msi (Join-Path $PSScriptRoot 'wix\credstore.wxs')

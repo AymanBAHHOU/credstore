@@ -279,6 +279,29 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: .\packaging\build-msi.ps1
+      - name: Check the .msi has its pages (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $msi = (Get-ChildItem dist\credstore-*.msi).FullName
+          $wi = New-Object -ComObject WindowsInstaller.Installer
+          $db = $wi.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $wi, @($msi, 0))
+          function Rows($sql) {
+            $v = $db.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $db, @($sql))
+            $v.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $v, $null) | Out-Null
+            $out = @()
+            while ($r = $v.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $v, $null)) {
+              $out += $r.GetType().InvokeMember('StringData', 'GetProperty', $null, $r, 1)
+            }
+            $out
+          }
+          $dialogs = Rows 'SELECT `Dialog` FROM `Dialog`'
+          foreach ($d in 'WelcomeDlg', 'VerifyReadyDlg', 'ProgressDlg', 'ExitDialog', 'MaintenanceTypeDlg') {
+            if ($dialogs -notcontains $d) { throw "the .msi has no $d (found: $dialogs)" }
+          }
+          $actions = Rows 'SELECT `Action` FROM `CustomAction`'
+          if ($actions -notcontains 'CsLaunchApp') { throw "the .msi has no CsLaunchApp (found: $actions)" }
+          Write-Host "pages: $($dialogs -join ', ')"
       - name: Install the .msi and smoke test (Windows)
         if: runner.os == 'Windows'
         shell: powershell

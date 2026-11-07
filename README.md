@@ -53,6 +53,9 @@ below without a terminal: approve requests (with a notification when one arrives
 and remove secrets, grant folders, connect Claude Code and run the health check.
 Closing the window keeps it in the tray. Every approval still needs the passphrase.
 
+On Windows the installer ends on a page that offers to open the app; no sign-out is
+needed (the installer lets your account in directly, not only through the groups).
+
 Builds are not code-signed yet, so Windows SmartScreen and macOS Gatekeeper warn before
 installing (on macOS: right-click the package, then Open). The MSI also turns on page
 file encryption (applies after a restart); pass `ENCRYPTPAGEFILE=0` to leave it alone.

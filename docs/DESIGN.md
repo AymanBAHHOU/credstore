@@ -565,6 +565,11 @@ script is fixed for every format.
 | `.deb`, `.rpm` | nfpm (`packaging/nfpm.yaml`) | `/usr/bin`, `/usr/lib/credstore` | `postinst` / `%post`; `prerm` / `%preun` on removal only, not upgrade |
 | `.pkg` | `pkgbuild` (`packaging/macos/build-pkg.sh`) | `/usr/local/bin`, `/usr/local/share/credstore` | `postinstall` |
 
+- **MSI pages.** Double-clicked, the MSI shows welcome, ready, progress and finish
+  pages (a custom set of the WiX UI extension's dialogs, `CredstoreUI`: no licence page,
+  no folder choice). The finish page says the service is running, that no sign-out is
+  needed, and offers "Open credstore now" (`WixShellExec`, from the UI sequence, so as
+  the user and not elevated). `/qn` skips the pages.
 - **Which user is added to the groups.** MSI: `CREDSTOREUSER`, defaulting to
   `LogonUser` (the account that started the install, also when UAC elevated it).
   deb/rpm: `SUDO_USER`. pkg: the console user. If there is none (root, or a headless

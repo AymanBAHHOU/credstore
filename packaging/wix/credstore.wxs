@@ -7,11 +7,16 @@
   Everything else (service, groups, ACLs, policy) is done by the same install.ps1 that
   installs from source, run with -Package as a deferred custom action (as SYSTEM).
 
+  Double-clicked, it shows a welcome page, a ready page, the progress and a finish page
+  that says what to do next and offers to open the app (CredstoreUI below). Silent
+  installs (/qn, as CI does) skip all of it.
+
   Public properties (msiexec /i credstore.msi NAME=value):
     CREDSTOREUSER    account added to the credstore groups (default: the installing user)
     ENCRYPTPAGEFILE  1 (default) turns on page file encryption; 0 leaves it alone
 -->
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <Package
       Name="credstore"
       Manufacturer="credstore"
@@ -50,7 +55,7 @@
       </Component>
 <?if $(var.WithApp) = "1" ?>
       <Component>
-        <File Source="$(var.AppExe)" Name="credstore-app.exe" KeyPath="yes" />
+        <File Id="AppExeFile" Source="$(var.AppExe)" Name="credstore-app.exe" KeyPath="yes" />
       </Component>
 <?endif?>
       <Component Id="PathEntry" Guid="0c1f7e52-3b9a-4d61-8f0e-7a2c5d9b13e8">
@@ -92,6 +97,53 @@
       <ComponentRef Id="AppShortcut" />
 <?endif?>
     </Feature>
+
+    <!-- Installer pages: welcome, ready, progress, finish. No licence page and no
+         folder choice (the scripts expect %ProgramFiles%\credstore). -->
+    <UI Id="CredstoreUI">
+      <TextStyle Id="WixUI_Font_Normal" FaceName="!(loc.Advanced_Font_FaceName)" Size="!(loc.Advanced_Font_Normal_Size)" />
+      <TextStyle Id="WixUI_Font_Bigger" FaceName="!(loc.Advanced_Font_FaceName)" Size="!(loc.Advanced_Font_Bigger_Size)" />
+      <TextStyle Id="WixUI_Font_Title" FaceName="!(loc.Advanced_Font_FaceName)" Size="!(loc.Advanced_Font_Title_Size)" Bold="yes" />
+      <Property Id="DefaultUIFont" Value="WixUI_Font_Normal" />
+
+      <DialogRef Id="ErrorDlg" />
+      <DialogRef Id="FatalError" />
+      <DialogRef Id="FilesInUse" />
+      <DialogRef Id="MsiRMFilesInUse" />
+      <DialogRef Id="PrepareDlg" />
+      <DialogRef Id="ProgressDlg" />
+      <DialogRef Id="ResumeDlg" />
+      <DialogRef Id="UserExit" />
+
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Condition="NOT Installed" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="1" Condition="NOT Installed" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" Order="2" Condition="Installed" />
+      <Publish Dialog="MaintenanceWelcomeDlg" Control="Next" Event="NewDialog" Value="MaintenanceTypeDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="RepairButton" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="RemoveButton" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="Back" Event="NewDialog" Value="MaintenanceWelcomeDlg" />
+<?if $(var.WithApp) = "1" ?>
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="CsLaunchApp" Order="1"
+               Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
+<?endif?>
+      <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" Order="999" />
+    </UI>
+    <UIRef Id="WixUI_Common" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <!-- Shown on the finish page (also after a repair or removal, hence the wording). -->
+<?if $(var.WithApp) = "1" ?>
+    <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT"
+              Value="The credstore service is running. Open the credstore app (Start menu) to create your vault, add secrets and connect Claude Code. No sign-out or restart is needed, except for page file encryption, which applies at the next restart." />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Open credstore now" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+    <!-- Runs from the finish page, so as the user, not elevated. -->
+    <Property Id="WixShellExecTarget" Value="[#AppExeFile]" />
+    <CustomAction Id="CsLaunchApp" BinaryRef="Wix4UtilCA_X64" DllEntry="WixShellExec"
+                  Impersonate="yes" Return="ignore" />
+<?else?>
+    <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT"
+              Value="The credstore service is running. Open &quot;credstore setup&quot; from the Start menu to create your vault and connect Claude Code." />
+<?endif?>
 
     <!-- The installing user, unless CREDSTOREUSER was given. -->
     <SetProperty Id="CREDSTOREUSER" Value="[LogonUser]" Before="InstallInitialize"
