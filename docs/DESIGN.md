@@ -775,6 +775,40 @@ On Linux and macOS installs the policy is root's (`/etc/credstore/policy.toml`, 
 says to edit the file with sudo. The installers were not changed to hand the file to
 the service: that is a change to who may set policy, for the owner to decide.
 
+**Windows: the policy is Administrators' too (2026-11-07, owner's decision).** Before,
+`%ProgramData%\credstore\policy.toml` sat in the service's own folder with full control,
+so a daemon that was taken over could widen its own rules; on Linux and macOS it cannot.
+Now Windows matches:
+
+- `install.ps1` gives the service full control of what it creates (vault, index, audit
+  log, `run\`) but, on the folder itself, only list, read and create: no "delete child",
+  so it cannot remove or replace a file it does not own. `policy.toml` and `users` get a
+  protected DACL: SYSTEM and Administrators full control, the service read. (`users`
+  says who may use the endpoints, the same kind of decision.)
+- A change from the app still needs the passphrase. The daemon edits and validates the
+  text as before but does not write it: it keeps it under a unique id for
+  `POLICY_EDIT_TTL_SECS` (5 min) and answers `PolicyEditPending { id }`
+  (`PolicyInfo.needs_admin` tells the app in advance).
+- The app runs `credstore policy-apply ID` with ShellExecuteEx "runas", hidden; Windows
+  asks the human (UAC). The helper connects to the daemon (the pipe owner check proves it
+  is the service), takes the text with `Proof::PolicyEdit(id)`, checks the file still
+  has the hash the change was made from, writes it (a new file created with the
+  protected DACL, then renamed over the old one, so it never has broader access), and
+  calls `FinishPolicyEdit`. The daemon checks the file holds exactly the text, audits
+  `policy_changed` with the human's peer and the helper as `admin`, and reloads.
+- The id is not a secret: the text comes from the daemon, never from the command line or
+  a file the agent could change, so holding the id only lets someone apply the change the
+  human made. It works only for `TakePolicyEdit` and `FinishPolicyEdit`.
+- Exit codes the app turns into words: 0 done, 3 the file changed meanwhile, 4 the
+  change expired or was replaced, 1 anything else (with the message in a report file).
+  Declining UAC writes nothing.
+- An administrator can still edit the file by hand, then `credstore reload`.
+
+CI: the installed smoke test (non-admin) prepares a change and checks it cannot finish
+it; the next step, as the elevated runner, runs `policy-apply` and checks the file, its
+ACL, and that the change cannot be applied twice. Not tested in CI: the UAC prompt
+itself (runners have none).
+
 **Windows Hello switch.** Security has a switch that enrols (`hello::create`, then
 `AddApprovalKey`, after checking the passphrase) or removes the key, the same steps as
 `credstore hello enrol` / `remove`.

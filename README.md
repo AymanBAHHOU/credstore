@@ -109,6 +109,11 @@ credstore doctor          # check the install
 Your account cannot read any of these. Editing the policy and reading the audit log need
 `sudo` (or an elevated shell on Windows). `credstore reload` applies policy edits.
 
+The service can read the policy but not change it, so a compromised daemon cannot widen
+its own rules. On Windows the app can still change a secret's hosts and commands and the
+timeouts: you enter your passphrase, then Windows asks you to allow credstore to make
+changes as administrator. On Linux and macOS, edit the file with `sudo`.
+
 ### Dev mode (no install)
 
 `credstored --dev` runs the daemon as you, with everything under `~/.credstore`. Use

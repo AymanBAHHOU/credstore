@@ -12,6 +12,7 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use credstore_core::names;
 use credstore_core::vault::{MIN_PASSPHRASE_LEN, MIN_REDACTABLE_LEN};
+use credstore_os::admin::Elevated;
 use credstore_os::{EndpointKind, Mode, Paths, OS_NAME};
 use credstore_proto::{
     read_message, write_message, ActivityEntry, AgentRequest, ApproverOp, ApproverRequest,
@@ -204,18 +205,18 @@ impl Api {
         pass: SecretText,
     ) -> Result<()> {
         names::validate_name(name)?;
-        expect_ok(
-            self.client
-                .approver(
-                    ApproverOp::SetSecretRules {
-                        name: name.to_owned(),
-                        allow_hosts,
-                        allow_commands,
-                    },
-                    pass,
-                )
-                .await?,
-        )
+        let resp = self
+            .client
+            .approver(
+                ApproverOp::SetSecretRules {
+                    name: name.to_owned(),
+                    allow_hosts,
+                    allow_commands,
+                },
+                pass,
+            )
+            .await?;
+        self.policy_changed(resp).await
     }
 
     /// Change the `[defaults]` timers.
@@ -226,18 +227,62 @@ impl Api {
         approval_timeout_secs: Option<u64>,
         pass: SecretText,
     ) -> Result<()> {
-        expect_ok(
-            self.client
-                .approver(
-                    ApproverOp::SetDefaults {
-                        session_idle_secs,
-                        grant_ttl_secs,
-                        approval_timeout_secs,
-                    },
-                    pass,
-                )
-                .await?,
-        )
+        let resp = self
+            .client
+            .approver(
+                ApproverOp::SetDefaults {
+                    session_idle_secs,
+                    grant_ttl_secs,
+                    approval_timeout_secs,
+                },
+                pass,
+            )
+            .await?;
+        self.policy_changed(resp).await
+    }
+
+    /// The daemon's answer to a policy change. On Windows installs it only checks the
+    /// change: run `credstore policy-apply` as administrator (Windows asks) to write it.
+    async fn policy_changed(&self, resp: Response) -> Result<()> {
+        let Response::PolicyEditPending { id } = resp else {
+            return expect_ok(resp);
+        };
+        let exe = std::env::current_exe().context("finding this program")?;
+        let cli = crate::setup::cli_path(&exe);
+        let report = std::env::temp_dir().join(format!("credstore-policy-{id}.txt"));
+        let args = vec![
+            "policy-apply".to_owned(),
+            id,
+            "--report".to_owned(),
+            report.to_string_lossy().into_owned(),
+        ];
+        let ran =
+            tokio::task::spawn_blocking(move || credstore_os::admin::run_elevated(&cli, &args))
+                .await
+                .map_err(|e| anyhow::anyhow!("admin step: {e}"))?;
+        let detail = std::fs::read_to_string(&report).unwrap_or_default();
+        let _ = std::fs::remove_file(&report);
+        use crate::policy_apply as pa;
+        match ran.context("starting the admin step")? {
+            Elevated::Declined => {
+                bail!("Windows did not get administrator approval, so the policy is unchanged.")
+            }
+            Elevated::Exited(c) if c == pa::OK as u32 => Ok(()),
+            Elevated::Exited(c) if c == pa::CHANGED_MEANWHILE as u32 => bail!(
+                "The policy file was changed by someone else meanwhile, so nothing was \
+                 written. Make the change again."
+            ),
+            Elevated::Exited(c) if c == pa::EXPIRED as u32 => {
+                bail!("The change waited too long for administrator approval. Make it again.")
+            }
+            Elevated::Exited(c) => {
+                let detail = detail.trim();
+                if detail.is_empty() {
+                    bail!("The admin step failed (exit code {c}); the policy is unchanged.")
+                }
+                bail!("The admin step failed: {detail}")
+            }
+        }
     }
 
     /// Create a Windows Hello key (Windows asks the user) and enrol it in the vault.
