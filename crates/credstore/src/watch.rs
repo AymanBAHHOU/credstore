@@ -87,10 +87,45 @@ pub struct RequestView {
     /// Longest "approve for this session"; 0 means once only.
     pub max_grant_secs: u64,
     pub max_grant: String,
+    /// Set for an HTTP request the daemon would send (then `command` is "METHOD URL").
+    pub http: Option<HttpView>,
+}
+
+/// An HTTP request the daemon would send with the secret in one header.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct HttpView {
+    pub method: String,
+    pub url: String,
+    /// The header that carries the secret, with `{value}` in its place.
+    pub secret_header: String,
+    /// Other headers, as `Name: value`.
+    pub headers: Vec<String>,
+    /// `N bytes: <start of the body>`, if there is a body.
+    pub body: Option<String>,
 }
 
 pub fn describe(r: &PendingRequest) -> RequestView {
+    let http = r.http.as_ref().map(|h| HttpView {
+        method: printable(&h.method),
+        url: printable(&h.url),
+        secret_header: printable(&h.header_template),
+        headers: h
+            .headers
+            .iter()
+            .map(|x| printable(&format!("{}: {}", x.name, x.value)))
+            .collect(),
+        body: h.body_bytes.map(|n| {
+            format!(
+                "{n} bytes: {}",
+                printable(h.body_preview.as_deref().unwrap_or(""))
+            )
+        }),
+    });
     let (command, is_shell) = match (&r.argv, &r.shell) {
+        _ if http.is_some() => {
+            let h = http.as_ref().map(|h| format!("{} {}", h.method, h.url));
+            (h.unwrap_or_default(), false)
+        }
         (Some(argv), _) => (
             argv.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" "),
             false,
@@ -150,6 +185,7 @@ pub fn describe(r: &PendingRequest) -> RequestView {
         } else {
             String::new()
         },
+        http,
     }
 }
 
@@ -159,6 +195,24 @@ pub fn show(r: &PendingRequest, out: &mut dyn Write) -> anyhow::Result<()> {
     writeln!(out)?;
     writeln!(out, "=== Request {} ===", v.id)?;
     writeln!(out, "reason:   {}", v.reason)?;
+    if let Some(h) = &v.http {
+        writeln!(out, "http:     {} {}", h.method, h.url)?;
+        writeln!(
+            out,
+            "secret:   {}  (credstored sends it; the agent never sees it)",
+            v.secrets.join(", ")
+        )?;
+        writeln!(out, "header:   {}", h.secret_header)?;
+        for line in &h.headers {
+            writeln!(out, "  also:   {line}")?;
+        }
+        if let Some(body) = &h.body {
+            writeln!(out, "body:     {body}")?;
+        }
+        writeln!(out, "hosts:    {}", v.network)?;
+        writeln!(out, "from:     {}", v.from)?;
+        return Ok(());
+    }
     if !v.command.is_empty() {
         let label = if v.is_shell { "shell:   " } else { "command: " };
         writeln!(out, "{label} {}", v.command)?;

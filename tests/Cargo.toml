@@ -29,6 +29,10 @@ path = "m5_adversarial.rs"
 name = "m7_installed"
 path = "m7_installed.rs"
 
+[[test]]
+name = "m11_http"
+path = "m11_http.rs"
+
 # A hostile command for the adversarial suite.
 [[bin]]
 name = "credstore-adversary"

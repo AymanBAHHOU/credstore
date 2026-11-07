@@ -46,6 +46,13 @@ jobs:
         run: cargo test -p credstore-tests --test m5_adversarial
         env:
           CREDSTORE_FORCE_SANDBOX: none
+      # M11: a real HTTPS request through http_request (public echo service), once more
+      # after a pause if the service hiccups.
+      - name: http_request against a live HTTPS service
+        shell: bash
+        run: |
+          cargo test -p credstore-tests --test m11_http -- --ignored \
+            || { sleep 20; cargo test -p credstore-tests --test m11_http -- --ignored; }
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny

@@ -217,6 +217,8 @@ impl State {
                     );
                 }
                 Injection::Stdin => stdin = Some(value),
+                // Refused for commands by `request::check`.
+                Injection::Header => return Err("header injection is only for HTTP".into()),
             }
         }
         if p.injection == Injection::File {

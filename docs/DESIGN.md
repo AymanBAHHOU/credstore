@@ -408,7 +408,8 @@ memory in dev mode.
   `server`, `macros`, `transport-io` only. No HTTP transport, no auth code. rmcp
   handles protocol version negotiation, which matters: the 2026-07-28 MCP revision
   dropped the `initialize` handshake, and a hand-rolled server would have to track that.
-- Tools: `list_secrets` (no input) and `run_with_secrets`. There is no tool that returns
+- Tools: `list_secrets` (no input), `run_with_secrets` and, since M11, `http_request`
+  (see "`http_request`"). There is no tool that returns
   a value, and the shim could not offer one: it holds no secrets and only relays the
   agent endpoint, which never sends values.
 - **Strict input schema** for `run_with_secrets` (generated with schemars from the
@@ -694,6 +695,80 @@ allowed user, so the check is that the page loads. The layout was checked in a b
 with a stubbed backend. Not tested: clicking through the tabs in the real app, and
 notifications and the tray on a real desktop.
 
+## `http_request`: the auth proxy (M11)
+
+Built as spec 6.6 designs it, not as the per-run local proxy the roadmap first sketched:
+the agent calls `http_request {method, url, secret, header_template, reason, headers?,
+body?, timeout_secs?}` and **the daemon makes the HTTPS request itself**. The secret
+never enters a process the agent controls, so even an approved request can only send it
+to a host its policy names. (A per-run proxy would have had the same property for the
+command, but needs loopback access from inside the sandbox, which bubblewrap's network
+namespace removes, and a URL rewrite in every client.)
+
+**Protocol.** `AgentRequest::Http(HttpRequest)` and `Response::HttpResult {status,
+headers, body, truncated, redactions}`. `Injection` gains `header`, used only to label
+these requests; a run asking for it is refused. `PendingRequest` gains `http: {method,
+url, header_template, headers, body_bytes, body_preview}`; for HTTP requests `argv`,
+`shell` and `program` are absent and `cwd` is empty.
+
+**Policy.** A secret may be used this way only if its effective `network` is
+`"allow-list"` and the URL's host is in its `allow_hosts` (`host`, `host:port`, or
+`*.domain` for subdomains; no port means 443). Without that the request is denied before
+the human is asked, so the default policy allows no HTTP use at all. `require_approval`,
+`grant_ttl_secs`, `max_runtime_secs` (the request timeout) and `max_output_bytes` (the
+body cap) apply; `allow_commands`, `allow_dirs`, `allow_shell`, `sandbox` and
+`injection` are about commands and do not. Listing `header` in `injection` is a policy
+error that says so. For commands, `allow-list` is still not enforced (the gap message
+now points to `http_request`).
+
+**Checks before policy** (`credstore-core::http`): method one of GET, HEAD, POST, PUT,
+PATCH, DELETE; GET and HEAD without a body; the URL is ASCII `https://`, without user
+info, backslashes, whitespace, control characters or a fragment, with a plain host name
+(or IPv6 literal) and a port without leading zeros, so the host policy checks cannot be
+read differently later; `header_template` is `Name: …{value}…` with `{value}` exactly
+once and not a transport header; at most 32 extra headers, none of them `Host`,
+`Content-Length`, `Transfer-Encoding`, `Connection` and similar, nor the secret's own
+header; body at most 1 MiB. Errors never echo header values or the body.
+
+**Sending** (`credstored::http`, blocking, on its own thread): the URL is parsed again
+by the HTTP library and must give the same scheme, host and port, or nothing is sent.
+HTTPS only, **no redirects followed** (a 3xx comes back to the agent, which may call
+again: that is a new request), no proxy from the environment, a global timeout, and the
+body read up to `max_output_bytes` (then cut and marked `truncated`). The secret header
+is marked sensitive. Response headers and body are redacted like command output and the
+result goes back as text (invalid UTF-8 replaced).
+
+**Approval** reuses the M4 queue (`Job::Run` / `Job::Http`). `watch` and the app show
+the method and URL, the secret header with `{value}` in place, the other headers, the
+body size and its first 400 characters, and the allowed hosts. A session grant covers
+exactly the same request (method, URL, secret header, headers and body) from the same
+user.
+
+**Audit.** `request` (with `kind: "http"`, method, URL, header names only, body size),
+`policy_denied`, `approved`/`denied`, `http_sent` (written before anything is sent;
+failing to write it means nothing is sent), `http_finished` (status, size, redactions,
+or the redacted error).
+
+**Dependency** beyond spec section 4: **`ureq` 3** with `rustls` (ring) and the Mozilla
+root list (`webpki-roots`), no gzip, no cookies. Small and synchronous, which suits one
+request per approval; `reqwest` would pull in hyper and a second async stack. The root
+list is CDLA-Permissive-2.0, allowed for that crate only in `deny.toml`. Trust comes
+from that list, not the OS store, so a corporate TLS-inspecting proxy is not trusted.
+
+**Not covered:** query-string or body injection of the secret (header only), multipart
+or binary bodies, responses as bytes. The header value sits in an ordinary buffer
+inside the HTTP library until the request is written.
+
+**Tested** in `tests/m11_http.rs`: policy denials (no allow-list, wrong host, wrong
+port), malformed URLs, unknown secret, `header` refused for commands, the pending
+request as `watch` prints it, denial, an approved request (to a closed local port, so no
+network) with a session grant covering the identical request and not a different URL.
+`live_the_response_is_redacted` (ignored by default, run by CI) sends a real request to
+a public echo service, which returns the secret header in its body, and checks it comes
+back as `[REDACTED:NAME]`; then a self-signed certificate is refused. The MCP test checks
+the tool's schema and a policy denial over stdio. Core unit tests cover URL, header and
+host matching.
+
 ## Stubbed per OS
 
 | Capability      | Linux                 | macOS                 | Windows               |
@@ -725,6 +800,10 @@ real terminal is not, since CI has none.
 - `tracing-subscriber`: needed to actually emit `tracing` output (stderr only) from the
   binaries.
 - `rmcp` (in the spec's list): see the MCP section.
+- `ureq` 3 (rustls, webpki-roots): the HTTPS client for `http_request` (M11); see that
+  section.
+- The desktop app (`app/`, its own workspace) uses Tauri 2 and its dialog and
+  notification plugins (M10).
 
 ## Dependency advisories
 

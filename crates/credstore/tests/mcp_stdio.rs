@@ -173,12 +173,29 @@ async fn mcp_tools_work_end_to_end_and_never_return_values() {
     mcp.send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
         .await;
 
-    // Exactly the two tools, with strict input schemas.
+    // Exactly the three tools, with strict input schemas.
     let tools = mcp.call(2, "tools/list", json!({})).await;
     let list = tools["result"]["tools"].as_array().expect("tools").clone();
     let mut names: Vec<&str> = list.iter().map(|t| t["name"].as_str().unwrap()).collect();
     names.sort();
-    assert_eq!(names, ["list_secrets", "run_with_secrets"], "{tools}");
+    assert_eq!(
+        names,
+        ["http_request", "list_secrets", "run_with_secrets"],
+        "{tools}"
+    );
+    let http_tool = list.iter().find(|t| t["name"] == "http_request").unwrap();
+    let http_schema = &http_tool["inputSchema"];
+    assert_eq!(http_schema["additionalProperties"], false, "{http_schema}");
+    for field in ["method", "url", "secret", "header_template", "reason"] {
+        assert!(
+            http_schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == field),
+            "{field} should be required: {http_schema}"
+        );
+    }
     let run_tool = list
         .iter()
         .find(|t| t["name"] == "run_with_secrets")
@@ -205,6 +222,28 @@ async fn mcp_tools_work_end_to_end_and_never_return_values() {
     assert!(!is_error, "{r}");
     assert!(
         text.contains("API_KEY") && text.contains("Test account key"),
+        "{text}"
+    );
+
+    // http_request: the starter policy lists no hosts for the secret, so it is denied
+    // before anyone is asked.
+    let r = mcp
+        .tool(
+            40,
+            "http_request",
+            json!({
+                "method": "GET",
+                "url": "https://api.example.com/v1/me",
+                "secret": "API_KEY",
+                "header_template": "Authorization: Bearer {value}",
+                "reason": "Check which account the key belongs to",
+            }),
+        )
+        .await;
+    let (text, is_error) = tool_text(&r);
+    assert!(is_error, "{r}");
+    assert!(
+        text.contains("denied") && text.contains("allow-list"),
         "{text}"
     );
 

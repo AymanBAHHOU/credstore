@@ -32,6 +32,8 @@ pub struct RequestId(pub String);
 pub enum AgentRequest {
     ListSecrets,
     Run(RunRequest),
+    /// The daemon makes an HTTPS request with one secret in a header (spec 6.6).
+    Http(HttpRequest),
 }
 
 /// A request to run a command with secrets injected.
@@ -55,13 +57,47 @@ pub struct RunRequest {
     pub injection: Option<Injection>,
 }
 
-/// How a secret reaches the child process.
+/// How a secret reaches the child process, or (`Header`) the HTTP request the daemon
+/// makes for an [`HttpRequest`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Injection {
     Env,
     File,
     Stdin,
+    Header,
+}
+
+/// An HTTPS request the daemon makes itself, adding one secret to one header (spec 6.6).
+/// The secret never enters a process the agent controls.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HttpRequest {
+    /// `GET`, `POST`, `PUT`, `PATCH`, `DELETE` or `HEAD`.
+    pub method: String,
+    /// Absolute `https://` URL. Its host must be in the secret's `allow_hosts`.
+    pub url: String,
+    pub secret: String,
+    /// One header line with `{value}` where the secret goes, e.g.
+    /// `Authorization: Bearer {value}`.
+    pub header_template: String,
+    /// Shown to the human verbatim. Never trusted for anything else.
+    pub reason: String,
+    /// Extra request headers (not the secret's header, not hop-by-hop ones).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub headers: Vec<HttpHeader>,
+    /// Request body, as text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HttpHeader {
+    pub name: String,
+    pub value: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +171,7 @@ pub enum GrantScope {
 pub enum Response {
     Secrets { secrets: Vec<SecretInfo> },
     RunResult(RunResult),
+    HttpResult(HttpResult),
     Denied { reason: String },
     Pending { requests: Vec<PendingRequest> },
     Status(StatusInfo),
@@ -160,6 +197,37 @@ pub struct RunResult {
     pub stderr: String,
     pub truncated: bool,
     pub redactions: u64,
+}
+
+/// Response to an approved [`HttpRequest`]. Headers and body are already redacted.
+/// Redirects are not followed: a 3xx comes back as is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HttpResult {
+    pub status: u16,
+    pub headers: Vec<HttpHeader>,
+    /// Body as text (invalid UTF-8 replaced), cut at the policy's `max_output_bytes`.
+    pub body: String,
+    pub truncated: bool,
+    pub redactions: u64,
+}
+
+/// The HTTP request a pending approval would make.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PendingHttp {
+    pub method: String,
+    pub url: String,
+    /// The header line with `{value}` still in place of the secret.
+    pub header_template: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub headers: Vec<HttpHeader>,
+    /// Size of the request body in bytes, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_bytes: Option<u64>,
+    /// The start of the body, for the human to read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_preview: Option<String>,
 }
 
 /// Everything the human needs to decide on a request.
@@ -189,6 +257,10 @@ pub struct PendingRequest {
     /// Longest "approve for this session" policy allows; 0 = once only.
     pub max_grant_secs: u64,
     pub peer: PeerInfo,
+    /// Set for an HTTP request (then there is no argv, shell or program, and `cwd` is
+    /// empty).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http: Option<PendingHttp>,
 }
 
 /// Identity of the process on the other end of a connection.

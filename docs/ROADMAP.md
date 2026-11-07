@@ -10,7 +10,7 @@ on Windows, Linux and macOS, and every design change is recorded in `docs/DESIGN
 | M8 | Releases and installers | Download and double-click: `.msi`, `.pkg`, `.deb`, `.rpm`. Optional page-file encryption and "Connect Claude Code" |
 | M9 | No sign-out, no manual folder grants | Works right after install; the first run in a new folder asks to grant it |
 | M10 | Desktop app (Tauri) | Setup wizard, approval notifications, secrets manager, audit viewer, health page |
-| M11 | Auth proxy | Approved commands talk to a local proxy that adds the key; the command never holds it |
+| M11 | Auth proxy | `http_request`: credstored calls HTTPS APIs itself with the key in a header; no command ever holds it |
 | M12 | Windows AppContainer sandbox | Windows approved commands lose file and network access, like Linux and macOS |
 | M13 | Biometric approval | Windows Hello / Touch ID instead of typing the passphrase (passphrase stays as fallback) |
 | M14 | Backup, recovery, rotation | Encrypted backup and restore, optional recovery key, rotation reminders |
@@ -53,10 +53,11 @@ by approvers (see `docs/DESIGN.md`, "Desktop app").
 
 ## M11: auth proxy
 
-Per-run local HTTP proxy. A secret declares its upstream base URL and allowed hosts; the
-command gets a base URL pointing at the proxy and a dummy token; the proxy adds the real
-credential and forwards over HTTPS. No TLS interception. Where the sandbox restricts
-networking (Linux, macOS), the command can reach only the proxy.
+Built as spec 6.6 designs it: an `http_request` MCP tool. The daemon sends the HTTPS
+request itself with the secret in one header, only to hosts in the secret's
+`allow_hosts`, and returns the redacted response; the secret never enters a process the
+agent controls. (The per-run local proxy first sketched here would need loopback access
+from inside the network sandbox; see `docs/DESIGN.md`.)
 
 ## M12: Windows AppContainer
 

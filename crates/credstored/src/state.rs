@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use credstore_core::audit::AuditLog;
 use credstore_core::policy::Policy;
 
-use crate::approvals::Approvals;
+use crate::approvals::{Approvals, Job};
 use credstore_core::vault::{Vault, VaultContents, VaultError};
 use credstore_os::{exec, Mode, Paths, Platform};
 use credstore_proto::{
@@ -275,23 +275,35 @@ impl State {
                 Err(VaultError::Missing(_)) => Response::Secrets { secrets: vec![] },
                 Err(e) => error(ErrorCode::Internal, e.to_string()),
             },
-            AgentRequest::Run(req) => {
-                let prepared = match self.prepare_run(req, peer).await {
-                    Ok(p) => p,
-                    Err(resp) => return resp,
-                };
-                let decision = tokio::select! {
-                    d = self.authorize_run(&prepared, peer) => d,
-                    () = closed => {
-                        self.cancel_request(&prepared.id, "disconnect");
-                        return Response::Denied { reason: "the agent disconnected".into() };
-                    }
-                };
-                match decision {
-                    Ok(values) => self.execute(prepared, values).await,
-                    Err(resp) => resp,
-                }
+            AgentRequest::Run(req) => match self.prepare_run(req, peer).await {
+                Ok(p) => self.authorize_and_do(Job::Run(p), peer, closed).await,
+                Err(resp) => resp,
+            },
+            AgentRequest::Http(req) => match self.prepare_http(req, peer).await {
+                Ok(p) => self.authorize_and_do(Job::Http(p), peer, closed).await,
+                Err(resp) => resp,
+            },
+        }
+    }
+
+    /// Wait for approval (or a grant), then run the command or send the request.
+    async fn authorize_and_do(
+        self: &Arc<Self>,
+        job: Job,
+        peer: &PeerInfo,
+        closed: impl std::future::Future<Output = ()>,
+    ) -> Response {
+        let decision = tokio::select! {
+            d = self.authorize(&job, peer) => d,
+            () = closed => {
+                self.cancel_request(job.id(), "disconnect");
+                return Response::Denied { reason: "the agent disconnected".into() };
             }
+        };
+        match (decision, job) {
+            (Ok(values), Job::Run(p)) => self.execute(p, values).await,
+            (Ok(values), Job::Http(p)) => self.execute_http(p, values).await,
+            (Err(resp), _) => resp,
         }
     }
 

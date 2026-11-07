@@ -619,3 +619,49 @@ fn allow_dirs_also_match_the_canonical_form_of_their_prefix() {
         }],
     );
 }
+
+#[test]
+fn http_requests_need_allow_hosts() {
+    let p = unix(STRIPE);
+    let e = p
+        .evaluate_http("STRIPE_KEY", "api.stripe.com", 443, Some(5))
+        .unwrap();
+    assert_eq!(e.network, NetworkPolicy::AllowList);
+    assert_eq!(e.timeout_secs, 5);
+    assert_eq!(e.grant_ttl_cap_secs, 600);
+    assert!(e.require_approval);
+
+    let err = p
+        .evaluate_http("STRIPE_KEY", "evil.example", 443, None)
+        .unwrap_err();
+    assert!(err.0.contains("may not be sent to evil.example"), "{err}");
+    let err = p
+        .evaluate_http("STRIPE_KEY", "api.stripe.com", 8443, None)
+        .unwrap_err();
+    assert!(err.0.contains("may not be sent"), "{err}");
+    // No allow-list, no HTTP: the daemon would be sending the secret somewhere.
+    let err = p
+        .evaluate_http("PROD_DB_URL", "api.stripe.com", 443, None)
+        .unwrap_err();
+    assert!(err.0.contains("allow-list"), "{err}");
+    let err = p
+        .evaluate_http("UNLISTED", "api.stripe.com", 443, None)
+        .unwrap_err();
+    assert!(err.0.contains("allow-list"), "{err}");
+    let strict = unix("[defaults]\nstrict = true\n");
+    let err = strict
+        .evaluate_http("UNLISTED", "api.stripe.com", 443, None)
+        .unwrap_err();
+    assert!(err.0.contains("strict"), "{err}");
+}
+
+#[test]
+fn header_is_not_a_command_injection_mode() {
+    for text in [
+        "[defaults]\ninjection = [\"header\"]\n",
+        "[secret.A]\ninjection = [\"env\", \"header\"]\n",
+    ] {
+        let err = Policy::parse(text, MatchStyle::Unix).unwrap_err();
+        assert!(err.0.contains("allow_hosts"), "{err}");
+    }
+}

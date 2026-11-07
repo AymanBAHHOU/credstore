@@ -12,6 +12,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 mod approvals;
+mod http;
 mod run;
 mod runner;
 mod server;

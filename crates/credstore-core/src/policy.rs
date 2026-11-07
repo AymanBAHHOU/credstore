@@ -237,6 +237,7 @@ impl Policy {
         if defaults.injection.is_empty() {
             return Err(bad("[defaults] injection must list at least one mode"));
         }
+        check_injection("[defaults]", &defaults.injection)?;
 
         let mut secrets = BTreeMap::new();
         for (name, s) in file.secret {
@@ -273,6 +274,7 @@ impl Policy {
                     "{where_} injection must list at least one mode"
                 )));
             }
+            check_injection(&where_, &rules.injection)?;
             secrets.insert(name, rules);
         }
         Ok(Self {
@@ -296,6 +298,17 @@ fn check_limits(where_: &str, runtime: u64, output: u64) -> Result<(), PolicyErr
     if !(1..=MAX_OUTPUT_CAP).contains(&output) {
         return Err(bad(format!(
             "{where_} max_output_bytes must be between 1 and {MAX_OUTPUT_CAP}"
+        )));
+    }
+    Ok(())
+}
+
+/// `injection` lists how commands get secrets; HTTP requests are allowed by `allow_hosts`.
+fn check_injection(where_: &str, modes: &[Injection]) -> Result<(), PolicyError> {
+    if modes.contains(&Injection::Header) {
+        return Err(bad(format!(
+            "{where_} injection: \"header\" is not a command injection mode; http_request \
+             is allowed by network = \"allow-list\" and allow_hosts"
         )));
     }
     Ok(())
@@ -557,6 +570,57 @@ impl Policy {
         Ok(eff)
     }
 
+    /// Allow (with effective settings) or deny an HTTP request (spec 6.6). The secret
+    /// must have `network = "allow-list"`, and the URL's host must be in its
+    /// `allow_hosts`. `allow_commands`, `allow_dirs`, `injection`, `allow_shell` and
+    /// `sandbox` are about commands and do not apply.
+    pub fn evaluate_http(
+        &self,
+        secret: &str,
+        host: &str,
+        port: u16,
+        timeout_secs: Option<u64>,
+    ) -> Result<Effective, Denial> {
+        let fallback;
+        let rules = match self.secrets.get(secret) {
+            Some(r) => r,
+            None if self.defaults.strict => {
+                return Err(Denial(format!(
+                    "{secret} has no [secret.{secret}] block and the policy is strict"
+                )));
+            }
+            None => {
+                fallback = self.default_rules();
+                &fallback
+            }
+        };
+        if rules.network != NetworkPolicy::AllowList {
+            return Err(Denial(format!(
+                "http_request needs the hosts {secret} may be sent to: set \
+                 network = \"allow-list\" and allow_hosts in [secret.{secret}]"
+            )));
+        }
+        if !crate::http::host_allowed(&rules.allow_hosts, host, port) {
+            return Err(Denial(format!(
+                "{secret} may not be sent to {host}:{port} (allowed: {})",
+                rules.allow_hosts.join(", ")
+            )));
+        }
+        Ok(Effective {
+            require_approval: rules.require_approval,
+            timeout_secs: timeout_secs.map_or(rules.max_runtime_secs, |t| {
+                t.clamp(1, rules.max_runtime_secs)
+            }),
+            max_output_bytes: rules.max_output_bytes,
+            sandbox: SandboxRequirement::Off,
+            network: NetworkPolicy::AllowList,
+            allow_hosts: rules.allow_hosts.clone(),
+            grant_ttl_cap_secs: rules.grant_ttl_secs,
+            approval_timeout_secs: self.defaults.approval_timeout_secs,
+            shell: false,
+        })
+    }
+
     fn default_rules(&self) -> SecretRules {
         let d = &self.defaults;
         SecretRules {
@@ -658,6 +722,7 @@ pub fn injection_name(i: Injection) -> &'static str {
         Injection::Env => "env",
         Injection::File => "file",
         Injection::Stdin => "stdin",
+        Injection::Header => "header",
     }
 }
 

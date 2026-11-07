@@ -5,14 +5,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use credstore_core::policy::injection_name;
+use credstore_core::policy::{injection_name, Effective};
 use credstore_core::vault::VaultContents;
 use credstore_proto::{
-    ErrorCode, GrantScope, Injection, PeerInfo, PendingRequest, RequestId, Response, SecretText,
+    ErrorCode, GrantScope, HttpRequest, Injection, PeerInfo, PendingRequest, RequestId, Response,
+    SecretText,
 };
 use serde_json::json;
 use tokio::sync::oneshot;
 
+use crate::http::PreparedHttp;
 use crate::run::Prepared;
 use crate::state::{error, peer_json, State};
 
@@ -24,9 +26,87 @@ pub(crate) enum Decision {
     Denied(String),
 }
 
+/// Something waiting for the human: a command to run or an HTTP request to send.
+#[derive(Debug, Clone)]
+pub(crate) enum Job {
+    Run(Prepared),
+    Http(PreparedHttp),
+}
+
+impl Job {
+    pub fn id(&self) -> &str {
+        match self {
+            Job::Run(p) => &p.id,
+            Job::Http(p) => &p.id,
+        }
+    }
+
+    pub fn secret_names(&self) -> &[String] {
+        match self {
+            Job::Run(p) => &p.req.secrets,
+            Job::Http(p) => &p.secret_names,
+        }
+    }
+
+    pub fn effective(&self) -> &Effective {
+        match self {
+            Job::Run(p) => &p.effective,
+            Job::Http(p) => &p.effective,
+        }
+    }
+
+    pub fn injection(&self) -> Injection {
+        match self {
+            Job::Run(p) => p.injection,
+            Job::Http(_) => Injection::Header,
+        }
+    }
+
+    /// What the human sees.
+    fn pending(&self, peer: &PeerInfo) -> PendingRequest {
+        let eff = self.effective();
+        match self {
+            Job::Run(p) => PendingRequest {
+                id: RequestId(p.id.clone()),
+                reason: p.req.reason.clone(),
+                argv: p.req.argv.clone(),
+                shell: p.req.shell.clone(),
+                program: p.program.as_ref().map(|x| x.to_string_lossy().into_owned()),
+                cwd: p.cwd.to_string_lossy().into_owned(),
+                secrets: p.secrets.clone(),
+                injection: p.injection,
+                sandbox: p.sandbox.mode,
+                sandbox_gaps: p.sandbox.gaps.clone(),
+                network: eff.network,
+                allow_hosts: eff.allow_hosts.clone(),
+                max_grant_secs: eff.grant_ttl_cap_secs,
+                peer: peer.clone(),
+                http: None,
+            },
+            Job::Http(p) => PendingRequest {
+                id: RequestId(p.id.clone()),
+                reason: p.req.reason.clone(),
+                argv: None,
+                shell: None,
+                program: None,
+                cwd: String::new(),
+                secrets: vec![p.secret.clone()],
+                injection: Injection::Header,
+                sandbox: credstore_proto::SandboxMode::None,
+                sandbox_gaps: vec![],
+                network: eff.network,
+                allow_hosts: eff.allow_hosts.clone(),
+                max_grant_secs: eff.grant_ttl_cap_secs,
+                peer: peer.clone(),
+                http: Some(p.pending()),
+            },
+        }
+    }
+}
+
 pub(crate) struct Entry {
     pub info: PendingRequest,
-    pub prepared: Prepared,
+    pub job: Job,
     pub requester: PeerInfo,
     pub tx: oneshot::Sender<Decision>,
 }
@@ -40,21 +120,40 @@ pub(crate) struct GrantKey {
     program: Option<PathBuf>,
     cwd: PathBuf,
     injection: Injection,
+    /// The whole HTTP request (method, URL, headers, body), minus reason and timeout.
+    http: Option<HttpRequest>,
     uid: Option<u32>,
     sid: Option<String>,
 }
 
 impl GrantKey {
-    pub fn new(p: &Prepared, peer: &PeerInfo) -> Self {
-        let mut secrets = p.req.secrets.clone();
+    pub fn new(job: &Job, peer: &PeerInfo) -> Self {
+        let mut secrets = job.secret_names().to_vec();
         secrets.sort();
+        let (argv, shell, program, cwd, http) = match job {
+            Job::Run(p) => (
+                p.req.argv.clone(),
+                p.req.shell.clone(),
+                p.program.clone(),
+                p.cwd.clone(),
+                None,
+            ),
+            Job::Http(p) => {
+                let mut req = p.req.clone();
+                req.reason.clear();
+                req.timeout_secs = None;
+                req.method = p.checked.method.clone();
+                (None, None, None, PathBuf::new(), Some(req))
+            }
+        };
         Self {
             secrets,
-            argv: p.req.argv.clone(),
-            shell: p.req.shell.clone(),
-            program: p.program.clone(),
-            cwd: p.cwd.clone(),
-            injection: p.injection,
+            argv,
+            shell,
+            program,
+            cwd,
+            injection: job.injection(),
+            http,
             uid: peer.uid,
             sid: peer.sid.clone(),
         }
@@ -160,49 +259,30 @@ impl State {
 
     /// Steps 4 to 6: use a grant, or wait for the human. Returns the approved values or
     /// the response to send back.
-    pub async fn authorize_run(
+    pub async fn authorize(
         self: &Arc<Self>,
-        prepared: &Prepared,
+        job: &Job,
         peer: &PeerInfo,
     ) -> Result<Values, Response> {
-        let id = prepared.id.clone();
-        let key = GrantKey::new(prepared, peer);
-        if let Some(values) = self.granted_values(&key, &prepared.req.secrets) {
+        let id = job.id().to_owned();
+        let key = GrantKey::new(job, peer);
+        if let Some(values) = self.granted_values(&key, job.secret_names()) {
             let _ = self.audit("approved", Some(&id), json!({"via": "grant"}));
             return Ok(values);
         }
-        if !prepared.effective.require_approval {
-            if let Some(values) = self.unlocked_values(&prepared.req.secrets) {
+        if !job.effective().require_approval {
+            if let Some(values) = self.unlocked_values(job.secret_names()) {
                 let _ = self.audit("approved", Some(&id), json!({"via": "policy"}));
                 return Ok(values);
             }
         }
 
-        let info = PendingRequest {
-            id: RequestId(id.clone()),
-            reason: prepared.req.reason.clone(),
-            argv: prepared.req.argv.clone(),
-            shell: prepared.req.shell.clone(),
-            program: prepared
-                .program
-                .as_ref()
-                .map(|p| p.to_string_lossy().into_owned()),
-            cwd: prepared.cwd.to_string_lossy().into_owned(),
-            secrets: prepared.secrets.clone(),
-            injection: prepared.injection,
-            sandbox: prepared.sandbox.mode,
-            sandbox_gaps: prepared.sandbox.gaps.clone(),
-            network: prepared.effective.network,
-            allow_hosts: prepared.effective.allow_hosts.clone(),
-            max_grant_secs: prepared.effective.grant_ttl_cap_secs,
-            peer: peer.clone(),
-        };
         let (tx, rx) = oneshot::channel();
         self.approvals().pending.insert(
             id.clone(),
             Entry {
-                info,
-                prepared: prepared.clone(),
+                info: job.pending(peer),
+                job: job.clone(),
                 requester: peer.clone(),
                 tx,
             },
@@ -210,7 +290,7 @@ impl State {
         self.notify();
         tracing::info!(id, "waiting for approval");
 
-        let wait = Duration::from_secs(prepared.effective.approval_timeout_secs);
+        let wait = Duration::from_secs(job.effective().approval_timeout_secs);
         let decision = tokio::time::timeout(wait, rx).await;
         if self.approvals().pending.remove(&id).is_some() {
             self.notify();
@@ -249,7 +329,7 @@ impl State {
         };
         self.notify();
 
-        let values = match select(&contents, &entry.prepared.req.secrets) {
+        let values = match select(&contents, entry.job.secret_names()) {
             Ok(v) => v,
             Err(why) => {
                 let _ = entry.tx.send(Decision::Denied(why.clone()));
@@ -258,7 +338,7 @@ impl State {
         };
 
         // Session grants are capped by policy; a cap of 0 means approve once only.
-        let cap = entry.prepared.effective.grant_ttl_cap_secs;
+        let cap = entry.job.effective().grant_ttl_cap_secs;
         let scope = match scope {
             GrantScope::Session { ttl_secs } if cap > 0 && ttl_secs > 0 => GrantScope::Session {
                 ttl_secs: ttl_secs.min(cap),
@@ -275,12 +355,12 @@ impl State {
                 "via": "human",
                 "scope": scope_json(&scope),
                 "approver": peer_json(approver),
-                "injection": injection_name(entry.prepared.injection),
+                "injection": injection_name(entry.job.injection()),
             }),
         );
         if let GrantScope::Session { ttl_secs } = scope {
             self.approvals().grants.push(Grant {
-                key: GrantKey::new(&entry.prepared, &entry.requester),
+                key: GrantKey::new(&entry.job, &entry.requester),
                 expires: Instant::now() + Duration::from_secs(ttl_secs),
             });
         }

@@ -80,6 +80,7 @@ fn kind_of(r: &Response) -> &'static str {
     match r {
         Response::Secrets { .. } => "secrets",
         Response::RunResult(_) => "run_result",
+        Response::HttpResult(_) => "http_result",
         Response::Denied { .. } => "denied",
         Response::Pending { .. } => "pending",
         Response::Status(_) => "status",

@@ -109,8 +109,20 @@ function renderRequests(list) {
     : "Waiting for requests. Closing the window keeps credstore running in the tray.";
 }
 
-function requestCard(r) {
-  const rows = [
+function requestRows(r) {
+  if (r.http) {
+    return [
+      ["Reason", r.reason],
+      ["Request", el("span", { class: "command" }, `${r.http.method} ${r.http.url}`)],
+      ["Secret", r.secrets.join(", ") + " (credstore sends it; the agent never sees it)"],
+      ["Secret header", el("span", { class: "command" }, r.http.secret_header)],
+      ["Other headers", r.http.headers.join("; ")],
+      ["Body", r.http.body],
+      ["Allowed hosts", r.network],
+      ["Asked by", r.from],
+    ];
+  }
+  return [
     ["Reason", r.reason],
     [r.is_shell ? "Shell" : "Command", el("span", { class: "command" }, r.command)],
     ["Program", r.program],
@@ -120,7 +132,11 @@ function requestCard(r) {
     ["Sandbox", r.sandbox],
     ["Network", r.network],
     ["Asked by", r.from],
-  ].filter(([, v]) => v);
+  ];
+}
+
+function requestCard(r) {
+  const rows = requestRows(r).filter(([, v]) => v);
   const dl = el("dl", {}, rows.flatMap(([k, v]) => [el("dt", {}, k), el("dd", {}, v)]));
   const gaps = r.not_enforced.map((g) => el("p", { class: "gap" }, "Not enforced: " + g));
   const pass = el("input", { type: "password", autocomplete: "off", placeholder: "Passphrase to confirm" });

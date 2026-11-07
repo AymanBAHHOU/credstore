@@ -30,6 +30,11 @@ allow = [
     "Zlib",
     "MPL-2.0",
 ]
+# The Mozilla CA list that ureq's rustls uses for http_request (M11) is data under a
+# permissive data license; allowed for that crate only.
+exceptions = [
+    { allow = ["CDLA-Permissive-2.0"], crate = "webpki-roots" },
+]
 
 [bans]
 multiple-versions = "warn"

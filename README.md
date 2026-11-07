@@ -145,12 +145,14 @@ macOS privacy controls; keep projects elsewhere (for example `~/code`).
 claude mcp add credstore -- credstore mcp
 ```
 
-(`credstore --dev mcp` for dev mode.) This gives the agent two tools:
+(`credstore --dev mcp` for dev mode.) This gives the agent three tools:
 
 - `list_secrets`: names and descriptions only.
 - `run_with_secrets`: argv (or a shell string, if policy allows it), the secret names, a
   reason of 10 to 300 characters, an optional cwd, timeout and injection mode (`env`,
   `file` or `stdin`). The call blocks until you decide in `credstore watch`.
+- `http_request`: an HTTPS request that credstored sends itself, with one secret in one
+  header (see [HTTPS APIs](#https-apis-http_request)). Also blocks until you decide.
 
 Keep `credstore watch` open in a terminal. It shows the full request (command, folder,
 secrets, reason, sandbox and anything **not** enforced) and asks for your passphrase to
@@ -205,6 +207,23 @@ injection      = ["env"]
 grant_ttl_secs = 0         # approve every single use
 ```
 
+### HTTPS APIs: `http_request`
+
+For an API that takes the key in a header, the agent can call the MCP tool
+`http_request` instead of running `curl`: credstored sends the HTTPS request itself and
+returns the redacted response, so no command ever holds the key. A secret can be used
+this way only if its policy lists the hosts it may be sent to:
+
+```toml
+[secret.OILPRICEAPI_KEY]
+network     = "allow-list"
+allow_hosts = ["api.oilpriceapi.com"]   # also "*.example.com", "host:8443"
+```
+
+The approval shows the method, URL, the header with `{value}` where the key goes, the
+other headers and the start of the body. Only `https://` URLs are allowed, redirects are
+not followed, and the daemon ignores `HTTP(S)_PROXY`.
+
 A request that breaks the policy is denied before you are asked. Shell mode (`sh -c`,
 `cmd /c`, `powershell -Command`) is denied unless `allow_shell = true`. On Windows, write
 `allow_dirs` as `C:/Users/...`.
@@ -239,9 +258,10 @@ How:
   the agent can read, or send it over the network. **You** are the control: read the
   command before approving. Restricting commands and folders in the policy, and
   `network = "deny"`, narrow it.
-- **Network allow-lists are not enforced in v1.** `network = "allow-list"` and
-  `allow_hosts` need the v2 auth proxy; with `sandbox = "require"` such runs are denied,
-  with `prefer` they run with full network access and the approval screen says so.
+- **Network allow-lists are not enforced for commands.** `allow_hosts` limits where
+  `http_request` sends a secret; a command run with that secret still has normal network
+  access. With `sandbox = "require"` such runs are denied, with `prefer` they run and the
+  approval screen says so. For HTTPS APIs, `http_request` closes this gap.
 - **Windows sandboxing is weak.** A Job Object bounds the process tree, its processes
   and its memory. It hides no files and cannot block the network, so `network = "deny"`
   with `sandbox = "require"` is always denied on Windows (AppContainer is planned for v2).

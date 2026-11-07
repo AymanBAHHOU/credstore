@@ -116,8 +116,8 @@ pub fn plan(
             false
         }
         NetworkPolicy::AllowList => {
-            let why = "network = \"allow-list\" is not enforced in v1 (allow_hosts needs the \
-                       v2 auth proxy); the command has normal network access"
+            let why = "network = \"allow-list\" is not enforced for commands (allow_hosts \
+                       limits http_request only); the command has normal network access"
                 .to_string();
             if need == SandboxNeed::Require {
                 return Err(why);
@@ -164,7 +164,9 @@ mod tests {
         assert!(plan(&job, Require, Deny)
             .unwrap_err()
             .contains("cannot be enforced"));
-        assert!(plan(&bwrap, Require, AllowList).unwrap_err().contains("v2"));
+        assert!(plan(&bwrap, Require, AllowList)
+            .unwrap_err()
+            .contains("http_request"));
         let p = plan(&bwrap, Require, Deny).unwrap();
         assert!(p.network_enforced && p.gaps.is_empty());
         let p = plan(&job, Require, Inherit).unwrap();

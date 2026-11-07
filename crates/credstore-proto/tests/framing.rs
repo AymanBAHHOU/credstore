@@ -47,6 +47,30 @@ fn agent_requests_round_trip() {
         injection: None,
         ..run_request()
     }));
+    round_trip(AgentRequest::Http(http_request()));
+    round_trip(AgentRequest::Http(HttpRequest {
+        method: "GET".into(),
+        headers: vec![],
+        body: None,
+        timeout_secs: None,
+        ..http_request()
+    }));
+}
+
+fn http_request() -> HttpRequest {
+    HttpRequest {
+        method: "POST".into(),
+        url: "https://api.example.com/v1/charges?x=1".into(),
+        secret: "STRIPE_KEY".into(),
+        header_template: "Authorization: Bearer {value}".into(),
+        reason: "Create a test charge in the Stripe test account".into(),
+        headers: vec![HttpHeader {
+            name: "Content-Type".into(),
+            value: "application/json".into(),
+        }],
+        body: Some("{\"amount\": 100}".into()),
+        timeout_secs: Some(10),
+    }
 }
 
 #[test]
@@ -123,8 +147,45 @@ fn responses_round_trip() {
                     pid: Some(4242),
                     exe: Some("C:/node.exe".into()),
                 },
+                http: None,
             }],
         },
+        Response::Pending {
+            requests: vec![PendingRequest {
+                id: RequestId("req_02".into()),
+                reason: "Create a test charge".into(),
+                argv: None,
+                shell: None,
+                program: None,
+                cwd: String::new(),
+                secrets: vec![],
+                injection: Injection::Header,
+                sandbox: SandboxMode::None,
+                sandbox_gaps: vec![],
+                network: NetworkPolicy::AllowList,
+                allow_hosts: vec!["api.example.com".into()],
+                max_grant_secs: 0,
+                peer: PeerInfo::default(),
+                http: Some(PendingHttp {
+                    method: "POST".into(),
+                    url: "https://api.example.com/v1/charges".into(),
+                    header_template: "Authorization: Bearer {value}".into(),
+                    headers: vec![],
+                    body_bytes: Some(13),
+                    body_preview: Some("{\"amount\":1}".into()),
+                }),
+            }],
+        },
+        Response::HttpResult(HttpResult {
+            status: 200,
+            headers: vec![HttpHeader {
+                name: "content-type".into(),
+                value: "application/json".into(),
+            }],
+            body: "{\"key\": \"[REDACTED:STRIPE_KEY]\"}".into(),
+            truncated: false,
+            redactions: 1,
+        }),
         Response::Status(StatusInfo {
             locked: true,
             dev_mode: true,

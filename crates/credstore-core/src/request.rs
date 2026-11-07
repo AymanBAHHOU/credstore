@@ -85,6 +85,11 @@ pub fn check(req: &RunRequest) -> Result<Injection, RequestError> {
     }
 
     let injection = req.injection.unwrap_or(Injection::Env);
+    if injection == Injection::Header {
+        return Err(bad(
+            "header injection is only for http_request, not for commands",
+        ));
+    }
     if injection == Injection::Stdin && req.secrets.len() != 1 {
         return Err(bad("stdin injection takes exactly one secret"));
     }

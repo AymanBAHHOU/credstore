@@ -1,12 +1,12 @@
 //! `credstore mcp`: the agent-facing MCP server on stdio (spec 6.1).
 //!
-//! Two tools, `list_secrets` and `run_with_secrets`, each a thin wrapper over the
+//! Three tools, `list_secrets`, `run_with_secrets` and `http_request`, each a thin wrapper over the
 //! daemon's agent endpoint. The shim holds no secrets and decrypts nothing; it can only
 //! return what the daemon returns, which is names, descriptions and redacted output.
 //! There is deliberately no tool that returns a secret value. stdout carries only MCP
 //! traffic; logs go to stderr.
 
-use credstore_proto::{AgentRequest, Injection, Response, RunRequest};
+use credstore_proto::{AgentRequest, HttpHeader, HttpRequest, Injection, Response, RunRequest};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig};
@@ -22,7 +22,40 @@ Call list_secrets to see which secrets exist (names and descriptions only). Call
 run_with_secrets with the exact command and the secret names it needs; a human approves \
 each request in a terminal with their passphrase, so the call can block for up to a few \
 minutes. Output comes back with secret values replaced by [REDACTED:NAME]. Do not try to \
-print, encode or exfiltrate secret values: the human reads every command before approving.";
+print, encode or exfiltrate secret values: the human reads every command before approving. \
+For an HTTPS API call that needs one secret in a header, prefer http_request: credstored \
+sends the request itself, so no command ever holds the secret (the secret's policy must \
+list the API's host in allow_hosts).";
+
+/// Arguments of `http_request`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HttpRequestArgs {
+    /// GET, HEAD, POST, PUT, PATCH or DELETE.
+    pub method: String,
+    /// Absolute https:// URL, query string included. Its host must be in the secret's
+    /// allow_hosts. Redirects are not followed.
+    #[schemars(length(min = 9, max = 8192))]
+    pub url: String,
+    /// Name of the secret (from list_secrets).
+    pub secret: String,
+    /// The header that carries the secret, with {value} where it goes, for example
+    /// "Authorization: Bearer {value}" or "X-Api-Key: {value}".
+    pub header_template: String,
+    /// Shown to the human verbatim when they decide. Say what the request does.
+    #[schemars(length(min = 10, max = 300))]
+    pub reason: String,
+    /// Other request headers as {"Name": "value"}.
+    #[serde(default)]
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
+    /// Request body as text (for example JSON). Not allowed with GET or HEAD.
+    #[serde(default)]
+    pub body: Option<String>,
+    /// Limit in seconds. Policy sets the maximum; this can only lower it.
+    #[serde(default)]
+    #[schemars(range(min = 1, max = 86400))]
+    pub timeout_secs: Option<u64>,
+}
 
 /// Arguments of `run_with_secrets`.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -105,6 +138,13 @@ pub fn tool_result(resp: Response) -> CallToolResult {
             "truncated": r.truncated,
             "redactions": r.redactions,
         })),
+        Response::HttpResult(r) => ok_json(json!({
+            "status": r.status,
+            "headers": r.headers.iter().map(|h| (h.name.clone(), h.value.clone())).collect::<Vec<_>>(),
+            "body": r.body,
+            "truncated": r.truncated,
+            "redactions": r.redactions,
+        })),
         Response::Denied { reason } => err_json(json!({ "denied": reason })),
         Response::Error { message, .. } => err_json(json!({ "error": message })),
         _ => err_json(json!({ "error": "unexpected reply from the credstore daemon" })),
@@ -173,6 +213,38 @@ impl McpServer {
             injection: args.injection.map(Into::into),
         };
         Ok(self.ask(AgentRequest::Run(req)).await)
+    }
+
+    #[tool(
+        name = "http_request",
+        description = "Send an HTTPS request with one secret in one header, without ever \
+                       seeing it: credstored makes the request itself. A human approves \
+                       each request with their passphrase, so this call blocks until they \
+                       decide. The URL's host must be in the secret's allow_hosts policy. \
+                       Returns {status, headers, body, truncated, redactions} with the \
+                       secret replaced by [REDACTED:NAME] wherever it appears, or \
+                       {denied: why}."
+    )]
+    async fn http_request(
+        &self,
+        Parameters(args): Parameters<HttpRequestArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let req = HttpRequest {
+            method: args.method,
+            url: args.url,
+            secret: args.secret,
+            header_template: args.header_template,
+            reason: args.reason,
+            headers: args
+                .headers
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(name, value)| HttpHeader { name, value })
+                .collect(),
+            body: args.body,
+            timeout_secs: args.timeout_secs,
+        };
+        Ok(self.ask(AgentRequest::Http(req)).await)
     }
 }
 
