@@ -87,7 +87,12 @@ pub fn base_env(home: &Path, tmp: &Path, path: &OsString) -> Vec<(String, String
 
 pub fn configure(cmd: &mut tokio::process::Command, launch: &Launch) -> OsResult<()> {
     cmd.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
-    if let Some(raw) = &launch.raw_tail {
+    // Through the AppContainer launcher, the tail is one of the launcher's arguments.
+    if let Some(raw) = launch
+        .raw_tail
+        .as_ref()
+        .filter(|_| !super::sandbox::uses_launcher(launch))
+    {
         cmd.raw_arg(raw);
     }
     Ok(())

@@ -26,6 +26,17 @@ fn none(detail: impl Into<String>) -> SandboxCapabilities {
     }
 }
 
+/// Nothing per run to check on Linux and macOS.
+pub fn plan_for_run(
+    caps: &SandboxCapabilities,
+    need: crate::sandbox::SandboxNeed,
+    network: NetworkPolicy,
+    _cwd: &std::path::Path,
+    _program: Option<&std::path::Path>,
+) -> Result<SandboxPlan, String> {
+    crate::sandbox::plan(caps, need, network)
+}
+
 fn denies_network(spec: &SandboxSpec, plan: &SandboxPlan) -> bool {
     plan.network_enforced && spec.network == Some(NetworkPolicy::Deny)
 }

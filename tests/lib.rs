@@ -70,7 +70,14 @@ impl TestDaemon {
     /// A project folder outside the credstore home (created on first use).
     pub fn work(&self) -> PathBuf {
         let w = self.root.join("work");
-        std::fs::create_dir_all(&w).unwrap();
+        if !w.exists() {
+            std::fs::create_dir_all(&w).unwrap();
+            // Windows: what `credstore grant` does for a project folder, so commands
+            // run in the AppContainer. Nothing elsewhere, or without a container.
+            if credstore_os::sandbox::container_sid().is_some() {
+                credstore_os::sandbox::grant_container(&w).unwrap();
+            }
+        }
         // Canonical, so it matches what the daemon reports and what policy sees.
         credstore_os::exec::canonical_dir(&w).unwrap()
     }

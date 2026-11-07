@@ -286,6 +286,9 @@ pub enum SandboxMode {
     Landlock,
     Seatbelt,
     JobObject,
+    /// Windows AppContainer (M12), inside a Job Object. One word, as Windows spells it.
+    #[serde(rename = "appcontainer")]
+    AppContainer,
     None,
 }
 

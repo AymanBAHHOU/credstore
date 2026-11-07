@@ -69,14 +69,19 @@ pub fn grant(
     p: &dyn Prompt,
     msg: &mut dyn Write,
 ) -> anyhow::Result<()> {
-    if dev {
+    let mode = if dev {
+        credstore_os::Mode::Dev
+    } else {
+        credstore_os::Mode::Installed
+    };
+    let steps = credstore_os::grant::plan(dir, mode)?;
+    if steps.is_empty() {
         writeln!(
             msg,
             "dev mode: approved commands run as you, so there is nothing to grant."
         )?;
         return Ok(());
     }
-    let steps = credstore_os::grant::plan(dir)?;
     writeln!(
         msg,
         "To let approved commands read and write {}, credstore will run (as you):",

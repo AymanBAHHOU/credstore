@@ -247,21 +247,15 @@ impl Api {
 
     /// The commands `grant` would run for `dir`, for showing before asking.
     pub fn grant_plan(&self, dir: &Path) -> Result<Vec<String>> {
-        if self.mode() == Mode::Dev {
-            return Ok(Vec::new());
-        }
-        Ok(credstore_os::grant::plan(dir)?
+        Ok(credstore_os::grant::plan(dir, self.mode())?
             .iter()
             .map(|s| s.display())
             .collect())
     }
 
-    /// Give the service account access to `dir` (nothing to do in dev mode).
+    /// Let approved commands use `dir` (often nothing to do in dev mode).
     pub fn grant(&self, dir: &Path) -> Result<()> {
-        if self.mode() == Mode::Dev {
-            return Ok(());
-        }
-        credstore_os::grant::apply(&credstore_os::grant::plan(dir)?)?;
+        credstore_os::grant::apply(&credstore_os::grant::plan(dir, self.mode())?)?;
         Ok(())
     }
 

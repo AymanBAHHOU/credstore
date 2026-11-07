@@ -20,7 +20,7 @@ entry. -Uninstall then only removes the service.
 .\deploy\install.ps1 -Uninstall
 #>
 param(
-    # Directory with credstore.exe and credstored.exe.
+    # Directory with credstore.exe, credstored.exe and credstore-sandbox.exe.
     [string]$From = (Join-Path $PSScriptRoot '..\target\release'),
     # The human who approves requests and runs the agent.
     [string]$User = "$env:USERDOMAIN\$env:USERNAME",
@@ -75,7 +75,8 @@ if ($Uninstall) {
 # -------------------------------- install ---------------------------------
 
 if ($Package) { $From = $InstallDir }
-foreach ($b in 'credstore.exe', 'credstored.exe') {
+$binaries = 'credstore.exe', 'credstored.exe', 'credstore-sandbox.exe'
+foreach ($b in $binaries) {
     if (-not (Test-Path (Join-Path $From $b))) {
         throw "missing $(Join-Path $From $b) (build with: cargo build --release)"
     }
@@ -89,7 +90,7 @@ if (Get-Service $Service -ErrorAction SilentlyContinue) {
 if (-not $Package) {
     Say "binaries -> $InstallDir"
     New-Item -ItemType Directory -Force $InstallDir | Out-Null
-    Copy-Item (Join-Path $From 'credstore.exe'), (Join-Path $From 'credstored.exe') $InstallDir -Force
+    Copy-Item ($binaries | ForEach-Object { Join-Path $From $_ }) $InstallDir -Force
     $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     if (($machinePath -split ';') -notcontains $InstallDir) {
         [Environment]::SetEnvironmentVariable('Path', "$machinePath;$InstallDir", 'Machine')

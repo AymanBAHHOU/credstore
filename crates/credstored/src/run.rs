@@ -219,7 +219,7 @@ impl State {
         };
         let sandbox = self
             .platform
-            .sandbox_plan(need, effective.network)
+            .sandbox_plan_for_run(need, effective.network, &cwd, program.as_deref())
             .map_err(|why| deny(format!("sandbox = \"require\", but {why}")))?;
 
         Ok(Prepared {

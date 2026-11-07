@@ -359,7 +359,8 @@ runner (`credstored::runner`):
 | Linux   | `bwrap`      | read-only `/`, writable cwd and run tmp, credstore paths replaced by empty tmpfs or `/dev/null`; new PID/IPC/UTS namespaces | yes (`--unshare-net`) | needs unprivileged user namespaces (Ubuntu 24.04: AppArmor sysctl) |
 | Linux   | `landlock`   | read anywhere except credstore paths, write only cwd and run tmp | kernel 6.7+ (Landlock ABI 4), else a gap | applied in `pre_exec`; also stops ptrace of the daemon |
 | macOS   | `seatbelt`   | `sandbox-exec` profile: writes only cwd and run tmp, credstore paths unreadable | yes (`deny network*`) | `sandbox-exec` is deprecated by Apple but works |
-| Windows | `job-object` | **not hidden** (gap is reported)                         | **no** (`require` denies) | see below |
+| Windows | `appcontainer` | only what the `credstore.run` container was granted: the cwd (`credstore grant`), run tmp and secret files; system folders read-only | yes (no network capabilities); loopback always blocked | inside the Job Object; see below |
+| Windows | `job-object` | **not hidden** (gap is reported)                         | **no** (`require` denies) | the fallback: folder or program the container cannot use |
 | any     | `none`       | not restricted (gap is reported)                        | no           | `require` denies |
 
 - `sandbox = "require"` denies a run whose plan has any gap (no sandbox, network deny not
@@ -369,13 +370,37 @@ runner (`credstored::runner`):
 - **`network = "allow-list"` is never enforced in v1.** `allow_hosts` needs the v2 auth
   proxy. With `require` it is denied; with `prefer` the command has normal network
   access and the gap says so.
-- **Windows deviation from spec 4.1:** no restricted token yet. `tokio::process` cannot
-  start a process with another token, and doing it by hand (`CreateProcessAsUserW` plus
-  pipe plumbing) is a large unsafe surface for a weak gain (a restricted token does not
-  hide files the user owns). AppContainer, which can, is on the v2 list. So on Windows the
-  command can read the vault file (encrypted), policy and audit log in dev mode; in
-  installed mode they belong to the service account.
-- `CREDSTORE_FORCE_SANDBOX=landlock|none` can only downgrade the sandbox. CI uses it to
+- **Windows: AppContainer (M12)**, in place of the restricted token of spec 4.1 (an
+  AppContainer hides files the user owns; a restricted token does not).
+  - One container, `credstore.run`. Its SID comes from the name, so it is the same on
+    every machine and `credstore grant` can compute it without the daemon.
+    `credstored` registers the profile (`CreateAppContainerProfile`) and falls back to
+    deriving the SID when it cannot (the service account has no profile to register in).
+  - **Launcher.** `tokio::process` cannot pass `SECURITY_CAPABILITIES` (std's
+    `raw_attribute` is unstable), so the daemon starts `credstore-sandbox.exe` (next to
+    `credstored.exe`) suspended in the Job Object, with the pipes, as before. The
+    launcher calls `CreateProcessW` with the container's security capabilities and a
+    handle list of just its three std handles, waits, and exits with the child's code.
+    The child is in the job too (job membership is inherited), so tree kill, process and
+    memory caps are unchanged. Code 0x7EC5 means the launcher itself failed.
+  - **Capabilities.** None, except `internetClient`, `internetClientServer` and
+    `privateNetworkClientServer` when the run's network is not `deny`. Loopback is
+    always blocked for AppContainers, which is fine: nothing a command needs listens
+    there that it should reach.
+  - **Files.** The container sees only what is granted to it or to ALL APPLICATION
+    PACKAGES: Windows and Program Files (read and execute), its cwd once its owner ran
+    `credstore grant` (which now adds `*S-1-15-2-…:(OI)(CI)M`, in dev mode too), and the
+    run's tmp and secret-file folders, granted at start with protected DACLs. The vault,
+    policy, audit log, the run directory and the human's other files are invisible.
+  - **Per-run plan.** Before asking the human, the daemon checks the cwd's DACL
+    (container or AC: read and write) and the program's (read and execute). If either
+    fails the run falls back to the Job Object alone with the reason as the first gap
+    ("Job Object only: …", naming `credstore grant` for a folder), or is denied under
+    `sandbox = "require"`. Per-user installs (`%LOCALAPPDATA%\Programs`, scoop, cargo
+    bin) are the usual reason for a program; spec 11 leaves that to the owner.
+  - `CREDSTORE_FORCE_SANDBOX=job-object` forces the fallback (CI runs the adversarial
+    suite both ways).
+- `CREDSTORE_FORCE_SANDBOX=landlock|job-object|none` can only downgrade the sandbox. CI uses it to
   run the adversarial suite on each fallback.
 
 **Redaction** (`credstore-core::redact`): exact value, value without a trailing newline,
@@ -782,7 +807,7 @@ host matching.
 | Group check     | done (CI install job) | done (CI install job) | done (CI install job) |
 | Memory guard    | dumpable, core limit; no mlock | deny-attach, core limit; no mlock | DACL; WER partial; no VirtualLock |
 | Runner          | done (session + killpg) | done (session + killpg), CI only | done (suspended start + Job Object) |
-| Sandbox         | done (bwrap, Landlock) | done (Seatbelt), CI only | Job Object only (no file hiding, no network deny) |
+| Sandbox         | done (bwrap, Landlock) | done (Seatbelt), CI only | done (AppContainer in a Job Object; Job Object alone for folders and programs the container cannot use) |
 | Service install | systemd unit + `install.sh` (CI) | launchd + `install.sh` (CI) | SCM service + `install.ps1` (CI) |
 | Package         | `.deb` (CI install), `.rpm` (built, inspected) | `.pkg`, unsigned (CI install) | `.msi`, unsigned (CI install) |
 | `doctor`        | done                  | done (no memory probe) | done                  |

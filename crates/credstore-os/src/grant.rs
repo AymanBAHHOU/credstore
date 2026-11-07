@@ -6,7 +6,8 @@
 //! as the user.
 //!
 //! - Windows: `icacls DIR /grant "NT SERVICE\credstore:(OI)(CI)M"`. Services hold
-//!   "bypass traverse checking", so parent folders need nothing.
+//!   "bypass traverse checking", so parent folders need nothing. Then the same for the
+//!   `credstore.run` AppContainer (M12), in which commands run; in dev mode only that.
 //! - Linux: `setfacl` gives `credstore` rwX on DIR and everything in it, a default ACL
 //!   on its directories (new files), and `x` (traverse only) on each parent the user
 //!   owns, such as the 0750 home directory.
@@ -15,7 +16,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::{OsError, OsResult, SERVICE_USER};
+use crate::{Mode, OsError, OsResult, SERVICE_USER};
 
 /// One command `grant` will run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,8 +48,9 @@ impl Step {
     }
 }
 
-/// The commands that give the service account access to `dir` (absolute, existing).
-pub fn plan(dir: &Path) -> OsResult<Vec<Step>> {
+/// The commands that let approved commands use `dir` (absolute, existing). Empty when
+/// there is nothing to do (dev mode on Linux and macOS, where commands run as you).
+pub fn plan(dir: &Path, mode: Mode) -> OsResult<Vec<Step>> {
     let dir = dir.canonicalize().map_err(|e| {
         OsError::Io(std::io::Error::new(
             e.kind(),
@@ -61,7 +63,7 @@ pub fn plan(dir: &Path) -> OsResult<Vec<Step>> {
             dir.display()
         )));
     }
-    Ok(imp::plan(&strip_verbatim(dir)))
+    Ok(imp::plan(&strip_verbatim(dir), mode))
 }
 
 /// Run the steps from [`plan`], stopping at the first failure.
@@ -91,10 +93,18 @@ fn strip_verbatim(p: PathBuf) -> PathBuf {
 mod imp {
     use super::*;
 
-    pub fn plan(dir: &Path) -> Vec<Step> {
+    pub fn plan(dir: &Path, mode: Mode) -> Vec<Step> {
         let d = dir.to_string_lossy();
-        let grant = format!("{SERVICE_USER}:(OI)(CI)M");
-        vec![Step::new("icacls.exe", &[&d, "/grant", &grant])]
+        let mut steps = Vec::new();
+        if mode == Mode::Installed {
+            let grant = format!("{SERVICE_USER}:(OI)(CI)M");
+            steps.push(Step::new("icacls.exe", &[&d, "/grant", &grant]));
+        }
+        if let Ok(sid) = crate::sys::windows::appcontainer::derived_sid() {
+            let grant = format!("*{sid}:(OI)(CI)M");
+            steps.push(Step::new("icacls.exe", &[&d, "/grant", &grant]));
+        }
+        steps
     }
 }
 
@@ -116,7 +126,10 @@ mod imp {
     }
 
     #[cfg(target_os = "linux")]
-    pub fn plan(dir: &Path) -> Vec<Step> {
+    pub fn plan(dir: &Path, mode: Mode) -> Vec<Step> {
+        if mode == Mode::Dev {
+            return Vec::new();
+        }
         let d = dir.to_string_lossy();
         let rw = format!("u:{SERVICE_USER}:rwX");
         let mut steps = vec![
@@ -137,7 +150,10 @@ mod imp {
     }
 
     #[cfg(target_os = "macos")]
-    pub fn plan(dir: &Path) -> Vec<Step> {
+    pub fn plan(dir: &Path, mode: Mode) -> Vec<Step> {
+        if mode == Mode::Dev {
+            return Vec::new();
+        }
         let d = dir.to_string_lossy();
         let rights = "list,search,add_file,add_subdirectory,delete_child,readattr,writeattr,\
                       readextattr,writeextattr,readsecurity,read,write,append,execute,delete";
@@ -158,8 +174,20 @@ mod tests {
     #[test]
     fn plan_names_the_service_account_and_the_folder() {
         let dir = std::env::temp_dir();
-        let steps = plan(&dir).unwrap();
+        let steps = plan(&dir, Mode::Installed).unwrap();
         assert!(!steps.is_empty());
+        if cfg!(windows) {
+            // Then the AppContainer, which is all there is to do in dev mode.
+            let dev = plan(&dir, Mode::Dev).unwrap();
+            assert_eq!(dev.len(), 1);
+            assert!(
+                dev[0].display().contains("*S-1-15-2-"),
+                "{}",
+                dev[0].display()
+            );
+        } else {
+            assert!(plan(&dir, Mode::Dev).unwrap().is_empty());
+        }
         let first = steps[0].display();
         assert!(first.contains(SERVICE_USER), "{first}");
         let shown = strip_verbatim(dir.canonicalize().unwrap());
@@ -172,6 +200,6 @@ mod tests {
     #[test]
     fn missing_folders_are_refused() {
         let dir = std::env::temp_dir().join("credstore-grant-no-such-dir");
-        assert!(plan(&dir).is_err());
+        assert!(plan(&dir, Mode::Installed).is_err());
     }
 }

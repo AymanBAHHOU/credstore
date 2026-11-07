@@ -61,6 +61,11 @@ impl Drop for OwnedHandle {
 pub struct LocalBox(*mut c_void);
 
 impl LocalBox {
+    /// Take ownership of memory from a LocalAlloc-ing API (null is allowed).
+    pub fn from_raw(p: *mut c_void) -> Self {
+        Self(p)
+    }
+
     pub fn ptr(&self) -> *mut c_void {
         self.0
     }
@@ -106,7 +111,7 @@ unsafe fn from_wide(p: PWSTR) -> String {
 ///
 /// # Safety
 /// `sid` must point to a valid SID.
-unsafe fn sid_to_string(sid: PSID) -> io::Result<String> {
+pub(crate) unsafe fn sid_to_string(sid: PSID) -> io::Result<String> {
     let mut out: PWSTR = std::ptr::null_mut();
     // SAFETY: `sid` is valid (caller); `out` receives a LocalAlloc'd string.
     check(unsafe { ConvertSidToStringSidW(sid, &mut out) })?;
@@ -197,7 +202,7 @@ pub fn lookup_account_sid(name: &str) -> io::Result<String> {
 }
 
 /// Binary SID from its string form.
-fn string_to_sid(s: &str) -> io::Result<LocalBox> {
+pub(crate) fn string_to_sid(s: &str) -> io::Result<LocalBox> {
     let ws = wide(s);
     let mut sid: PSID = std::ptr::null_mut();
     // SAFETY: `ws` is NUL-terminated; `sid` receives a LocalAlloc'd SID.

@@ -222,6 +222,15 @@ pub trait Sandbox {
         need: SandboxNeed,
         network: NetworkPolicy,
     ) -> Result<SandboxPlan, String>;
+    /// Like [`Sandbox::sandbox_plan`], also checking the run's folder and program where
+    /// that matters (Windows AppContainer).
+    fn sandbox_plan_for_run(
+        &self,
+        need: SandboxNeed,
+        network: NetworkPolicy,
+        cwd: &Path,
+        program: Option<&Path>,
+    ) -> Result<SandboxPlan, String>;
 }
 
 // ---------------------------------------------------------------------------

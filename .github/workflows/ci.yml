@@ -33,7 +33,17 @@ jobs:
           bwrap --ro-bind / / true && echo "bwrap works"
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # The daemon starts commands through credstore-sandbox.exe on Windows (M12); the
+      # tests find it next to their own binaries.
+      - run: cargo build -p credstored --bins
       - run: cargo test --workspace
+      # Windows: again with the Job Object alone (a machine where the AppContainer
+      # cannot be used).
+      - name: Adversarial suite with the Job Object only (Windows)
+        if: runner.os == 'Windows'
+        run: cargo test -p credstore-tests --test m5_adversarial --test m12_appcontainer
+        env:
+          CREDSTORE_FORCE_SANDBOX: job-object
       # Again with the Landlock fallback (what a machine without bubblewrap gets).
       - name: Adversarial suite with Landlock only (Linux)
         if: runner.os == 'Linux'
@@ -319,6 +329,7 @@ jobs:
           if ($p.ExitCode -ne 0) { Get-Content msi-remove.log -Tail 80; throw "msiexec /x failed ($($p.ExitCode))" }
           if (Get-Service credstore -ErrorAction SilentlyContinue) { throw 'service still there' }
           if (Test-Path "$env:ProgramFiles\credstore\credstored.exe") { throw 'binaries still there' }
+          if (Test-Path "$env:ProgramFiles\credstore\credstore-sandbox.exe") { throw 'launcher still there' }
           if (Test-Path "$env:ProgramFiles\credstore\credstore-app.exe") { throw 'app still there' }
           if (-not (Test-Path "$env:ProgramData\credstore")) { throw 'the vault directory was removed' }
 

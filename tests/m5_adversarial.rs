@@ -27,6 +27,11 @@ fn adversary() -> &'static str {
 /// A daemon with `API_KEY = FAKE`, policy `BASE_POLICY + extra`, vault unlocked.
 async fn ready(tag: &str, extra: &str) -> (TestDaemon, PathBuf) {
     capture_tracing();
+    // Windows: the adversary lives in target/, which an AppContainer cannot read; let
+    // it run there, as a machine-wide install would.
+    if credstore_os::sandbox::container_sid().is_some() {
+        credstore_os::sandbox::allow_program(Path::new(adversary())).unwrap();
+    }
     let d = TestDaemon::start(tag).await;
     d.init_vault().await;
     d.set_secret("API_KEY", FAKE).await;
@@ -191,6 +196,12 @@ async fn credstore_files_are_hidden_or_the_gap_is_reported() {
 
     let caps = capabilities();
     if caps.hides_paths {
+        let started = last_record(&d, "run_started");
+        assert_eq!(
+            started["sandbox"],
+            credstore_os::sandbox::mode_name(caps.mode),
+            "{started}"
+        );
         assert!(
             !r.stdout.contains("READ "),
             "{} let the command read credstore files:\n{}",

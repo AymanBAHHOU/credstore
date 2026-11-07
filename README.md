@@ -123,6 +123,10 @@ on macOS), asks, and runs them as you: you own the folder, so no admin rights ar
 needed. If an agent asks to run somewhere the service cannot open, the request is denied
 with the `credstore grant` command to run.
 
+On Windows, `credstore grant` also opens the folder to the AppContainer that approved
+commands run in, so run it for project folders in dev mode too. Without it, commands
+there run with the weaker Job Object sandbox, and the approval screen says so.
+
 The service account does not see your home directory's config (SSH keys, git
 credentials) or tools installed only for you (a Python under `AppData`, global npm
 packages, `~/.local/bin`). Install tools the agent should run machine-wide.
@@ -262,9 +266,12 @@ How:
   `http_request` sends a secret; a command run with that secret still has normal network
   access. With `sandbox = "require"` such runs are denied, with `prefer` they run and the
   approval screen says so. For HTTPS APIs, `http_request` closes this gap.
-- **Windows sandboxing is weak.** A Job Object bounds the process tree, its processes
-  and its memory. It hides no files and cannot block the network, so `network = "deny"`
-  with `sandbox = "require"` is always denied on Windows (AppContainer is planned for v2).
+- **Windows: the AppContainer needs a granted folder and a machine-wide program.**
+  Commands run in an AppContainer that sees only Windows, Program Files, folders opened
+  with `credstore grant`, and its own temp folder, with no network unless allowed. A
+  run in another folder, or of a program installed per user (for example under
+  `%LOCALAPPDATA%`), falls back to a Job Object, which hides no files and cannot block
+  the network; the approval screen says so, and `sandbox = "require"` denies it.
 - **Root, administrators, and anyone with debug privileges.** They can read any
   process's memory and any file. An agent running as an administrator (elevated, or with
   `SeDebugPrivilege` enabled) defeats the separate account. Run your agent as a normal
@@ -307,6 +314,6 @@ Not verified:
   input is tested to be refused).
 
 Open questions use the spec's defaults (section 12): no phone approval in v1; Windows
-sandbox is a Job Object (no restricted token, see docs/DESIGN.md); Windows and WSL
+sandbox is an AppContainer (no restricted token, see docs/DESIGN.md); Windows and WSL
 installs are independent; no per-secret usage limits; only `once` and `session`
 approvals, never "always".

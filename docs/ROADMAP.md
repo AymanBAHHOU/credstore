@@ -64,6 +64,12 @@ from inside the network sandbox; see `docs/DESIGN.md`.)
 Run approved commands in an AppContainer with a capability set that allows only the
 project folder and loopback to the proxy.
 
+Built: commands run in the `credstore.run` AppContainer inside the Job Object, through a
+small launcher (`credstore-sandbox.exe`). No loopback proxy is needed, since
+`http_request` is sent by the daemon. Folders the container was not granted, and
+programs it cannot execute (per-user installs), fall back to the Job Object with the
+reason on the approval screen; `sandbox = "require"` denies them.
+
 ## M13: biometric approval
 
 Windows Hello / Touch ID gates approvals, so the passphrase is not typed where a

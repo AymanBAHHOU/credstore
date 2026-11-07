@@ -200,8 +200,15 @@ async fn the_app_api_covers_setup_secrets_and_approvals() {
     let json = serde_json::to_string(&report).unwrap();
     assert!(json.contains("\"level\":\"warn\""), "{json}");
 
-    // Dev mode: grant has nothing to do.
-    assert!(api.grant_plan(&home).unwrap().is_empty());
+    // Dev mode: grant has nothing to do, except on Windows, where it opens the folder
+    // to the AppContainer.
+    let plan = api.grant_plan(&home).unwrap();
+    if cfg!(windows) {
+        assert_eq!(plan.len(), 1, "{plan:?}");
+        assert!(plan[0].contains("*S-1-15-2-"), "{plan:?}");
+    } else {
+        assert!(plan.is_empty(), "{plan:?}");
+    }
 
     // Remove, then lock.
     api.remove_secret("API_KEY", pass()).await.unwrap();

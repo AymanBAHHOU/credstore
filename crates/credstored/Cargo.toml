@@ -13,6 +13,11 @@ path = "src/lib.rs"
 name = "credstored"
 path = "src/main.rs"
 
+# Windows: starts approved commands inside the AppContainer (M12).
+[[bin]]
+name = "credstore-sandbox"
+path = "src/bin/credstore-sandbox.rs"
+
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true

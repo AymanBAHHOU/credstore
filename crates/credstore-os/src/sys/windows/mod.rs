@@ -1,5 +1,6 @@
 //! Windows.
 
+pub mod appcontainer;
 pub mod ipc;
 pub mod job;
 pub mod proc;

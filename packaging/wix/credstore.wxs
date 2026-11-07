@@ -40,6 +40,9 @@
         <File Source="$(var.BinDir)\credstored.exe" KeyPath="yes" />
       </Component>
       <Component>
+        <File Source="$(var.BinDir)\credstore-sandbox.exe" KeyPath="yes" />
+      </Component>
+      <Component>
         <File Source="$(var.DeployDir)\install.ps1" KeyPath="yes" />
       </Component>
       <Component>

@@ -88,6 +88,16 @@ impl Sandbox for Platform {
     ) -> Result<SandboxPlan, String> {
         crate::sandbox::plan(self.sandbox_capabilities(), need, network)
     }
+
+    fn sandbox_plan_for_run(
+        &self,
+        need: SandboxNeed,
+        network: NetworkPolicy,
+        cwd: &std::path::Path,
+        program: Option<&std::path::Path>,
+    ) -> Result<SandboxPlan, String> {
+        crate::sandbox::plan_for_run(self.sandbox_capabilities(), need, network, cwd, program)
+    }
 }
 
 impl MemoryGuard for Platform {

@@ -57,8 +57,76 @@ pub fn mode_name(m: SandboxMode) -> &'static str {
         SandboxMode::Landlock => "landlock",
         SandboxMode::Seatbelt => "seatbelt",
         SandboxMode::JobObject => "job-object",
+        SandboxMode::AppContainer => "appcontainer",
         SandboxMode::None => "none",
     }
+}
+
+/// `credstore-sandbox.exe`: start a command inside the AppContainer (Windows only).
+/// Returns the process exit code.
+pub fn launcher_main() -> i32 {
+    #[cfg(windows)]
+    {
+        crate::sys::windows::appcontainer::launcher_main()
+    }
+    #[cfg(not(windows))]
+    {
+        eprintln!("credstore-sandbox: only used on Windows");
+        2
+    }
+}
+
+/// Windows: the SID of the AppContainer approved commands run in, if this machine can
+/// use it. `credstore grant` gives it access to a folder.
+pub fn container_sid() -> Option<&'static str> {
+    #[cfg(windows)]
+    {
+        crate::sys::windows::sandbox::container_sid()
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+/// Windows: give the AppContainer read/write access to `dir` now (test setups). Other
+/// OSes need nothing.
+pub fn grant_container(dir: &std::path::Path) -> crate::OsResult<()> {
+    #[cfg(windows)]
+    {
+        crate::sys::windows::sandbox::grant_container(dir)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = dir;
+        Ok(())
+    }
+}
+
+/// Windows: let the AppContainer run `program` (test setups). Other OSes need nothing.
+pub fn allow_program(program: &std::path::Path) -> crate::OsResult<()> {
+    #[cfg(windows)]
+    {
+        crate::sys::windows::sandbox::allow_program(program)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = program;
+        Ok(())
+    }
+}
+
+/// Plan for one run, given where it runs and what it starts. Windows checks that the
+/// AppContainer can use the folder and the program, and otherwise falls back to the Job
+/// Object with the reason listed (or denies, with `sandbox = "require"`).
+pub fn plan_for_run(
+    caps: &SandboxCapabilities,
+    need: SandboxNeed,
+    network: NetworkPolicy,
+    cwd: &std::path::Path,
+    program: Option<&std::path::Path>,
+) -> Result<SandboxPlan, String> {
+    crate::sys::current::sandbox::plan_for_run(caps, need, network, cwd, program)
 }
 
 /// Probed once per process.
