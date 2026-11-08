@@ -47,6 +47,9 @@ credstore setup
 It creates the vault and, if you agree, registers credstore with Claude Code for all
 folders and adds Claude Code deny rules for `.env` files and credstore's own files.
 
+Stuck? See [Troubleshooting](#troubleshooting) for the usual WSL, Linux and Windows
+setup problems.
+
 **Desktop app.** The Windows and macOS packages also install the credstore app (Start
 menu "credstore", or `/Applications/credstore.app`); on Linux install
 `credstore-app_VERSION_amd64.deb` (or the `.rpm`) too. It does the same as the commands
@@ -325,6 +328,132 @@ if it can), that both endpoints answer as the real daemon, and whether your acco
 open the daemon's memory. With your passphrase, it shows the daemon's sandbox and each
 memory hardening feature, active or not. It also warns if Claude Code allowlists
 credstore's tools. It exits non-zero if anything failed.
+
+## Troubleshooting
+
+Problems people have hit while setting up, and what fixes them. Start with
+`credstore doctor`: it names most of these.
+
+### Linux and WSL2
+
+**`apt` says `E: Unsupported file ./credstore_0.1.0_amd64.deb given on commandline`.**
+Refresh the package lists first, and run `apt` from the folder that holds the files
+(the `./` matters, it tells `apt` this is a file and not a package name):
+
+```bash
+sudo apt-get update
+cd ~/Downloads   # wherever the .deb files are
+sudo apt install ./credstore_0.1.0_amd64.deb ./credstore-app_0.1.0_amd64.deb
+```
+
+**WSL: the service does not start, or `systemctl` says "System has not been booted with
+systemd".** Turn systemd on (unless `/etc/wsl.conf` already has a `[boot]` section; then
+add `systemd=true` under it by hand), then restart WSL from Windows:
+
+```bash
+printf '[boot]\nsystemd=true\n' | sudo tee -a /etc/wsl.conf
+```
+
+```powershell
+wsl --shutdown
+```
+
+**WSL: `credstore setup` or the app says you are not allowed to connect.** WSL often
+logs you in as `root` by default. Installed that way, the package does not know which
+normal user to let in, so no one is added. Let your normal user in (replace `you`):
+
+```bash
+sudo /usr/lib/credstore/install.sh --package --bin /usr/bin --user you
+```
+
+Then use that account (`su - you`, or set it as the default user in `/etc/wsl.conf`
+under `[user]` with `default=you`). Do not run credstore or your agent as root: root can
+read everything, so credstore cannot protect anything from it.
+
+**`weak version 'GLIBC_2.39' not found` when starting a program.** This is only a
+warning, and the program still works. The Linux packages are built on Ubuntu 24.04. On
+older systems (Ubuntu 22.04) glibc lacks two optional functions they can use.
+
+**The app opens a blank window (WSLg, some VMs).** WebKit cannot use the GPU there. Start
+the app with GPU buffers turned off:
+
+```bash
+WEBKIT_DISABLE_DMABUF_RENDERER=1 credstore-app &
+```
+
+To make it stick, add `export WEBKIT_DISABLE_DMABUF_RENDERER=1` to `~/.bashrc`.
+
+**You can't type in the app's "allowed hosts" or "allowed commands" fields.** This is
+on purpose. On Linux and macOS installs the policy belongs to root, so the app (and the
+service) can only show it. Newer versions show a note instead of the fields. Edit the
+policy with sudo, then apply it:
+
+```bash
+sudo nano /etc/credstore/policy.toml
+credstore reload
+```
+
+For example, to let a secret be sent to one API host:
+
+```toml
+[secret.MY_API_KEY]
+network     = "allow-list"
+allow_hosts = ["api.example.com"]
+```
+
+`credstore reload` asks for your passphrase. If the file has a mistake, it says where,
+and every request is denied until you fix it.
+
+**A command fails with a memory or JIT error (Node.js, Java).** See
+`MemoryDenyWriteExecute` in [Installed mode](#installed-mode-where-commands-run).
+
+### Windows
+
+**SmartScreen blocks the installer** ("Windows protected your PC"). Builds are not
+code-signed yet. Click **More info**, then **Run anyway**.
+
+**Changing a secret's hosts or commands in the app shows a Windows admin prompt.** This
+is expected. The service may only read the policy, so a compromised service cannot
+loosen its own rules. After you enter your passphrase, Windows asks you to let
+credstore make changes. Click **Yes** to save.
+- If you click **No**, nothing changes.
+- If you wait more than 5 minutes, the change expires. Save it again.
+- If the file changed in the meantime (for example, you edited it by hand), the app
+  refuses rather than overwrite it. Reopen the page and redo the change.
+
+To edit the file by hand instead, open an elevated editor on
+`%ProgramData%\credstore\policy.toml`, then run `credstore reload`.
+
+**Your account can't use the app or `credstore` after installing.** The installer
+lets the account that ran it in directly, without signing out. If someone else
+installed it, or you use another account, re-run the installer as administrator for
+that account:
+
+```powershell
+& "$env:ProgramFiles\credstore\install.ps1" -Package -User YOURPC\you
+```
+
+Signing out and back in also works, because then the groups apply.
+
+**Claude Code doesn't see credstore's tools.** Run `credstore setup` again (or
+**Connect Claude Code** on the app's Claude Code page), then restart Claude Code. It registers the
+`credstore mcp` command. Check with `claude mcp list`.
+
+**A command runs with the weaker Job Object sandbox, or is denied with
+`sandbox = "require"`.** The folder hasn't been granted, or the program is installed
+only for you. Run `credstore grant` on the project folder, and install tools
+machine-wide (see the Windows item in
+[What this does not protect against](#what-this-does-not-protect-against)).
+
+### Everywhere
+
+**`credstore watch` or `run` won't take the passphrase from a pipe.** This is on purpose.
+Approvals need a real terminal, so an agent cannot type them. Use a normal terminal
+window, or the desktop app.
+
+**Approved commands can't find your tools, SSH keys or git credentials.** In installed
+mode they run as the service account, not as you. See
+[Installed mode](#installed-mode-where-commands-run).
 
 ## Status
 
