@@ -91,6 +91,15 @@ enum Command {
     Mcp,
     /// Check the install: users, permissions, endpoints, sandbox, hardening.
     Doctor,
+    /// Write a policy change made in the app (Windows installs). The app runs this as
+    /// administrator after the passphrase; not for typing by hand.
+    #[command(hide = true)]
+    PolicyApply {
+        id: String,
+        /// Where to write an error message for the app.
+        #[arg(long)]
+        report: Option<std::path::PathBuf>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -191,6 +200,9 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
             HelloAction::Remove => commands::hello_remove(&client, &prompt, &mut msg).await,
         },
         Command::Mcp => credstore::mcp::serve(client).await,
+        Command::PolicyApply { id, report } => {
+            return Ok(credstore::policy_apply::policy_apply(&client, &id, report.as_deref()).await)
+        }
         Command::Doctor => {
             let report = credstore::doctor::doctor(&client, &prompt, &mut out).await?;
             return Ok(i32::from(report.failures() > 0));

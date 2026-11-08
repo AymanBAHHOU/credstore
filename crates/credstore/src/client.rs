@@ -91,6 +91,8 @@ fn kind_of(r: &Response) -> &'static str {
         Response::Pending { .. } => "pending",
         Response::Status(_) => "status",
         Response::Feed(_) => "feed",
+        Response::PolicyEditPending { .. } => "policy_edit_pending",
+        Response::PolicyEdit { .. } => "policy_edit",
         Response::Ok => "ok",
         Response::Error { .. } => "error",
     }

@@ -130,6 +130,17 @@ jobs:
           sudo bash ./deploy/install.sh --uninstall
           ! test -e /usr/local/bin/credstored
 
+      - name: No new logon needed (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          # M9: add the runner's own account, whose logon predates the groups. The users
+          # file gives it a pipe ACE of its own, so it connects at once. Done before the
+          # smoke test: the policy step below needs this account, and reinstalling
+          # restarts the service, which drops a prepared policy change.
+          .\deploy\install.ps1 -User "$env:USERDOMAIN\$env:USERNAME"
+          & "$env:ProgramFiles\credstore\credstore.exe" list
+          if ($LASTEXITCODE -ne 0) { throw 'credstore list failed for a user added after logon' }
       - name: Install and smoke test (Windows)
         if: runner.os == 'Windows'
         shell: powershell
@@ -154,15 +165,27 @@ jobs:
             -RedirectStandardOutput "$smoke\out.txt" -RedirectStandardError "$smoke\err.txt"
           Get-Content "$smoke\out.txt", "$smoke\err.txt"
           if ($p.ExitCode -ne 0) { throw "smoke test failed ($($p.ExitCode))" }
-      - name: No new logon needed (Windows)
+      - name: Policy change as administrator (Windows)
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          # M9: add the runner's own account, whose logon predates the groups. The
-          # users file gives it a pipe ACE of its own, so it connects at once.
-          .\deploy\install.ps1 -User "$env:USERDOMAIN\$env:USERNAME"
-          & "$env:ProgramFiles\credstore\credstore.exe" list
-          if ($LASTEXITCODE -ne 0) { throw 'credstore list failed for a user added after logon' }
+          # The smoke test made a policy change with the passphrase; the service could not
+          # write it. This runner is an elevated administrator, as the app's UAC step is.
+          $cs = "$env:ProgramFiles\credstore\credstore.exe"
+          $id = Get-Content C:\credstore-smoke\policy-edit-id.txt
+          & $cs policy-apply $id
+          if ($LASTEXITCODE -ne 0) { throw "policy-apply failed ($LASTEXITCODE)" }
+          $policy = "$env:ProgramData\credstore\policy.toml"
+          if (-not (Select-String -Path $policy -Pattern 'api.example.com' -SimpleMatch -Quiet)) { throw 'the change is not in the policy file' }
+          $acl = icacls $policy | Out-String
+          Write-Host $acl
+          if ($acl -notmatch 'NT SERVICE\\credstore:\(R\)') { throw 'the service must only read the policy' }
+          if ($acl -match 'NT SERVICE\\credstore:\((F|M|W)') { throw 'the service can change the policy' }
+          icacls "$env:ProgramData\credstore" | Write-Host
+          # A change is applied once.
+          & $cs policy-apply $id
+          if ($LASTEXITCODE -ne 4) { throw "an applied change must be gone ($LASTEXITCODE)" }
+          exit 0
       - name: Service log (Windows)
         if: failure() && runner.os == 'Windows'
         shell: powershell

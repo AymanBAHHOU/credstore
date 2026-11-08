@@ -1,5 +1,6 @@
 //! Windows.
 
+pub mod admin;
 pub mod appcontainer;
 pub mod foreground;
 pub mod hello;

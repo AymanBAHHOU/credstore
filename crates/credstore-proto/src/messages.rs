@@ -116,6 +116,11 @@ pub struct HttpHeader {
 pub enum Proof {
     Passphrase(SecretText),
     Key(KeyProof),
+    /// Names a policy change the daemon prepared after a passphrase
+    /// ([`Response::PolicyEditPending`]). Accepted only for [`ApproverOp::TakePolicyEdit`]
+    /// and [`ApproverOp::FinishPolicyEdit`], by the admin helper that writes the file.
+    /// Not a secret: it only lets its holder apply the change the human made.
+    PolicyEdit(String),
 }
 
 /// A signature by an approval key. Hex throughout.
@@ -247,6 +252,13 @@ pub enum ApproverOp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         approval_timeout_secs: Option<u64>,
     },
+    /// Where only administrators may write the policy file (Windows installs): get the
+    /// prepared change ([`Response::PolicyEdit`]) to write it. Proof:
+    /// [`Proof::PolicyEdit`].
+    TakePolicyEdit,
+    /// The admin helper wrote the prepared change: check the file, reload, audit.
+    /// Proof: [`Proof::PolicyEdit`].
+    FinishPolicyEdit,
 }
 
 impl ApproverOp {
@@ -283,16 +295,40 @@ pub enum GrantScope {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Response {
-    Secrets { secrets: Vec<SecretInfo> },
+    Secrets {
+        secrets: Vec<SecretInfo>,
+    },
     RunResult(RunResult),
     HttpResult(HttpResult),
-    Denied { reason: String },
-    Pending { requests: Vec<PendingRequest> },
+    Denied {
+        reason: String,
+    },
+    Pending {
+        requests: Vec<PendingRequest>,
+    },
     Status(Box<StatusInfo>),
     Feed(Box<Feed>),
+    /// A policy change was checked but only an administrator may write the file: run
+    /// `credstore policy-apply ID` elevated within [`POLICY_EDIT_TTL_SECS`].
+    PolicyEditPending {
+        id: String,
+    },
+    /// The prepared change for the admin helper: the whole new file, and the SHA-256 (hex)
+    /// of the file it was made from ("" if there was none), so a change made meanwhile is
+    /// not overwritten.
+    PolicyEdit {
+        text: String,
+        base_sha256: String,
+    },
     Ok,
-    Error { code: ErrorCode, message: String },
+    Error {
+        code: ErrorCode,
+        message: String,
+    },
 }
+
+/// How long a prepared policy change waits for the admin helper.
+pub const POLICY_EDIT_TTL_SECS: u64 = 300;
 
 /// Name and description of a secret. Never the value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -466,9 +502,12 @@ pub struct Feed {
 pub struct PolicyInfo {
     /// Where the policy file is.
     pub path: String,
-    /// Whether the daemon can change the file (`SetSecretRules`, `SetDefaults`). On Linux
+    /// Whether the app can change the file (`SetSecretRules`, `SetDefaults`). On Linux
     /// and macOS installs it belongs to root and is edited by hand.
     pub editable: bool,
+    /// Changes need an administrator (Windows installs): Windows asks before writing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub needs_admin: bool,
     pub strict: bool,
     pub session_idle_secs: u64,
     pub grant_ttl_secs: u64,

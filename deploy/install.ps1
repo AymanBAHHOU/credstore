@@ -132,13 +132,30 @@ Invoke-Native sc.exe @('failure', $Service, 'reset=', '86400', 'actions=', 'rest
 Say "data directory $DataDir"
 New-Item -ItemType Directory -Force $DataDir | Out-Null
 # SYSTEM, Administrators and the service only; nothing inherited from ProgramData
-# (which lets Users read and create).
+# (which lets Users read and create). The service gets full control of what it creates
+# (vault, index, audit log, run\), but on the folder itself only list, read and create:
+# without "delete child" it cannot remove or replace files it does not own, such as the
+# policy below.
 Invoke-Native icacls.exe @(
     $DataDir, '/inheritance:r',
     '/grant:r', '*S-1-5-18:(OI)(CI)F',
     '/grant:r', '*S-1-5-32-544:(OI)(CI)F',
-    '/grant:r', "${Account}:(OI)(CI)F"
+    '/grant:r', "${Account}:(OI)(CI)(IO)F"
 )
+Invoke-Native icacls.exe @($DataDir, '/grant', "${Account}:(RX,WD,AD,WEA,WA)")
+
+# Files only an administrator may change; the service reads them. A daemon that was
+# taken over cannot widen its own rules (policy) or let more accounts in (users). The
+# app changes the policy through `credstore policy-apply`, which Windows runs as
+# administrator after asking.
+function Protect-AdminFile([string]$Path) {
+    Invoke-Native icacls.exe @(
+        $Path, '/inheritance:r',
+        '/grant:r', '*S-1-5-18:F',
+        '/grant:r', '*S-1-5-32-544:F',
+        '/grant:r', "${Account}:R"
+    )
+}
 if ($User) {
     # The daemon lets accounts listed here in directly: group membership reaches a token
     # only at logon, a per-user pipe ACE applies at once (M9).
@@ -152,12 +169,15 @@ if ($User) {
     $listed = Get-Content $users | ForEach-Object { $_.Trim() }
     if ($listed -notcontains $User) { Add-Content -Path $users -Encoding ascii -Value $User }
 }
+$users = Join-Path $DataDir 'users'
+if (Test-Path $users) { Protect-AdminFile $users }
 $policy = Join-Path $DataDir 'policy.toml'
 if (Test-Path $policy) {
     Write-Host '    keeping the existing policy'
 } else {
     Copy-Item (Join-Path $PSScriptRoot 'policy.toml') $policy
 }
+Protect-AdminFile $policy
 
 Say 'starting'
 Start-Service $Service

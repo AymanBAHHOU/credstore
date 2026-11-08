@@ -49,6 +49,8 @@ pub(crate) struct State {
     pub(crate) active_runs: std::sync::atomic::AtomicUsize,
     /// What `harden_process` applied (set by the binary; empty in tests).
     pub(crate) hardening: Mutex<Vec<credstore_proto::HardeningReport>>,
+    /// A policy change waiting for the admin helper to write it (Windows installs).
+    pub(crate) policy_edit: Mutex<Option<crate::feed::PendingPolicyEdit>>,
 }
 
 /// With `session_idle_secs = 0` the runner relocks right after each run; the background
@@ -141,6 +143,7 @@ impl State {
             feed_version: tokio::sync::watch::channel(0).0,
             active_runs: std::sync::atomic::AtomicUsize::new(0),
             hardening: Mutex::new(Vec::new()),
+            policy_edit: Mutex::new(None),
         }
     }
 
@@ -259,6 +262,10 @@ impl State {
         match proof {
             Proof::Passphrase(pass) => self.verify_passphrase(pass, peer).await,
             Proof::Key(k) => self.verify_key(k, op, peer),
+            Proof::PolicyEdit(_) => Err(error(
+                ErrorCode::Unauthorized,
+                "a policy change id only applies that change",
+            )),
         }
     }
 
@@ -453,6 +460,9 @@ impl State {
         if let ApproverOp::AdminInit = req.op {
             return self.admin_init(&req.proof, peer).await;
         }
+        if let Proof::PolicyEdit(id) = &req.proof {
+            return self.policy_edit_step(id, &req.op, peer);
+        }
 
         let contents = match self.verify_proof(&req.proof, &req.op, peer).await {
             Ok(c) => c,
@@ -574,6 +584,10 @@ impl State {
                 drop(contents);
                 self.deny(&request_id, peer)
             }
+            ApproverOp::TakePolicyEdit | ApproverOp::FinishPolicyEdit => error(
+                ErrorCode::Unauthorized,
+                "this step needs a policy change id",
+            ),
             // Streamed by the server after `verify`.
             ApproverOp::SubscribePending | ApproverOp::SubscribeFeed => {
                 error(ErrorCode::BadRequest, "subscribe is streamed")

@@ -585,29 +585,36 @@ function secretDetail(s) {
       edit((n) => { const l = n[list]; if (!l.includes(v)) l.push(list === "hosts" ? v.toLowerCase() : v); });
     };
     const denied = r && r.network === "deny" && !d.hosts.length;
+    // Linux and macOS: root owns the policy file, so say so up front instead of showing
+    // fields that cannot be used.
+    const addForm = (input, list) => editable
+      ? el("form", { class: "addhost", onsubmit: add(input, list) }, input, el("button", { class: "btn" }, "Add"))
+      : null;
+    if (!editable) {
+      parts.push(el("p", { class: "readonly-note" }, `To change these on this system, edit ${p ? p.path : "the policy file"} with sudo, then run credstore reload. The policy file belongs to root, so the app can only show it.`));
+    }
     parts.push(
       el("div", { class: "sec" },
         el("h2", {}, "Where it may be sent"),
         el("p", { class: "help" }, "credstore sends this secret only to these hosts when an agent asks for an HTTPS request. Setting hosts also limits the network of commands that use it to them, where the sandbox can enforce that."),
         chipList(d.hosts, editable ? (i) => edit((n) => n.hosts.splice(i, 1)) : null,
           denied ? "network denied by the policy file" : "no hosts: HTTPS requests with it are refused"),
-        el("form", { class: "addhost", onsubmit: add(hostInput, "hosts") }, hostInput, el("button", { class: "btn", disabled: !editable }, "Add"))),
+        addForm(hostInput, "hosts")),
       el("div", { class: "sec" },
         el("h2", {}, "Commands it may run with"),
         el("p", { class: "help" }, "Empty means any command you approve. A pattern like curl *api.example.com* refuses everything else before it reaches you."),
         chipList(d.commands, editable ? (i) => edit((n) => n.commands.splice(i, 1)) : null, "any command you approve"),
-        el("form", { class: "addhost", onsubmit: add(cmdInput, "commands") }, cmdInput, el("button", { class: "btn", disabled: !editable }, "Add"))));
+        addForm(cmdInput, "commands")));
     if (r && r.allow_dirs) {
       parts.push(el("div", { class: "sec" }, el("h2", {}, "Folders"),
         el("p", { class: "help" }, "Set in the policy file. Requests from other folders are refused."),
         chipList(r.allow_dirs, null, "")));
     }
     const n = changes(name);
-    if (!editable) {
-      parts.push(el("p", { class: "readonly-note" }, `On this system the policy file belongs to root: edit ${p ? p.path : "it"} with sudo, then run credstore reload.`));
-    } else if (n) {
+    if (editable && n) {
       const pass = el("input", { class: "input", type: "password", autocomplete: "off", placeholder: "Passphrase to save", "aria-label": "Passphrase to save" });
-      const msg = el("span", { class: "grow msg" }, el("span", { class: "dot red" }), plural(n, "unsaved change", "unsaved changes"));
+      const msg = el("span", { class: "grow msg" }, el("span", { class: "dot red" }), plural(n, "unsaved change", "unsaved changes"),
+        p.needs_admin ? " · Windows asks for administrator approval" : "");
       const save = el("button", { class: "btn primary" }, "Save");
       parts.push(el("form", {
         class: "savebar",
@@ -723,7 +730,9 @@ function renderSecurity() {
   const p = feed && feed.policy;
   $("timers").hidden = !p;
   $("policy-path").textContent = p
-    ? (p.editable ? `These settings are saved in ${p.path}.` : `On this system the policy file belongs to root: edit ${p.path} with sudo, then run credstore reload.`)
+    ? (p.editable
+      ? `These settings are saved in ${p.path}.${p.needs_admin ? " Windows asks for administrator approval when you save them." : ""}`
+      : `On this system the policy file belongs to root: edit ${p.path} with sudo, then run credstore reload.`)
     : "";
   if (!p) return;
   for (const sel of document.querySelectorAll("#timers select")) {
