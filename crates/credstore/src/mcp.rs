@@ -130,7 +130,7 @@ fn err_json(v: serde_json::Value) -> CallToolResult {
 /// sends names, descriptions and redacted output only.
 pub fn tool_result(resp: Response) -> CallToolResult {
     match resp {
-        Response::Secrets { secrets } => ok_json(json!(secrets)),
+        Response::Secrets { secrets, .. } => ok_json(json!(secrets)),
         Response::RunResult(r) => ok_json(json!({
             "exit_code": r.exit_code,
             "stdout": r.stdout,

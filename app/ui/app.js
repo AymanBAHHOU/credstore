@@ -916,7 +916,7 @@ async function loadClaudeState() {
 }
 
 async function openGuide() {
-  guide.vault = guide.vault || (!!overview && overview.secrets.length > 0);
+  guide.vault = guide.vault || (!!overview && overview.reachable && !overview.no_vault);
   guide.skipped.clear();
   guide.msgs = {};
   await loadClaudeState();
@@ -1067,7 +1067,10 @@ $("open-guide").addEventListener("click", openGuide);
 
 /** First launch: open the guide if setup is not finished; otherwise never again. */
 async function maybeOpenGuide(o) {
-  if (!o.reachable || guideSeen()) return;
+  if (!o.reachable) return;
+  // No vault (a fresh install, or the data was deleted): always guide, whatever this
+  // app remembers from before.
+  if (guideSeen() && !o.no_vault) return;
   await loadClaudeState();
   if (o.secrets.length > 0 && claudeDone(guide.claude)) return markGuideSeen();
   openGuide();

@@ -103,7 +103,7 @@ pub async fn setup(
 ) -> Result<()> {
     // 1. The daemon must answer, or nothing else can work.
     let secrets = match client.agent(&AgentRequest::ListSecrets).await {
-        Ok(Response::Secrets { secrets }) => secrets,
+        Ok(Response::Secrets { secrets, .. }) => secrets,
         Ok(other) => return Err(crate::client::response_error(other)),
         Err(e) => bail!(
             "cannot reach credstored: {e:#}\n\

@@ -15,6 +15,8 @@
   Public properties (msiexec /i credstore.msi NAME=value):
     CREDSTOREUSER    account added to the credstore groups (default: the installing user)
     ENCRYPTPAGEFILE  1 (default) turns on page file encryption; 0 leaves it alone
+    DELETEDATA       1, when removing (msiexec /x credstore.msi DELETEDATA=1): also
+                     delete the vault, policy, audit log and groups. Never on upgrade.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
@@ -35,6 +37,7 @@
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/AymanBAHHOU/credstore" />
     <Property Id="ENCRYPTPAGEFILE" Value="1" Secure="yes" />
     <Property Id="CREDSTOREUSER" Secure="yes" />
+    <Property Id="DELETEDATA" Secure="yes" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="credstore" />
@@ -161,8 +164,11 @@
                  Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]install.ps1&quot; -Package -User &quot;[CREDSTOREUSER]&quot; -EncryptPageFile &quot;[ENCRYPTPAGEFILE]&quot;" />
     <SetProperty Id="CsRollback" Before="CsRollback" Sequence="execute"
                  Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]install.ps1&quot; -Package -Uninstall" />
+    <!-- DELETEDATA=1 adds -DeleteData, but never when a newer version replaces this one. -->
+    <SetProperty Id="CSDELETEARG" Value="-DeleteData" Before="InstallInitialize"
+                 Sequence="execute" Condition="DELETEDATA = 1 AND NOT UPGRADINGPRODUCTCODE" />
     <SetProperty Id="CsUninstall" Before="CsUninstall" Sequence="execute"
-                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]install.ps1&quot; -Package -Uninstall" />
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]install.ps1&quot; -Package -Uninstall [CSDELETEARG]" />
 
     <!-- WixQuietExec runs without a console window and copies output to the MSI log. -->
     <CustomAction Id="CsRollback" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec"

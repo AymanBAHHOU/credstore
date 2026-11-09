@@ -14,10 +14,16 @@ from the group SIDs. Safe to re-run: the vault, policy and audit log are kept.
 Called by the MSI: the binaries are already in place and the MSI owns them and the PATH
 entry. -Uninstall then only removes the service.
 
+.PARAMETER DeleteData
+With -Uninstall: also delete %ProgramData%\credstore (vault, policy, audit log) and the
+credstore groups. The secrets cannot be recovered afterwards. The MSI passes it when
+removed with DELETEDATA=1.
+
 .EXAMPLE
 .\deploy\install.ps1
 .\deploy\install.ps1 -From C:\Downloads\credstore -User MYPC\me
 .\deploy\install.ps1 -Uninstall
+.\deploy\install.ps1 -Uninstall -DeleteData
 #>
 param(
     # Directory with credstore.exe, credstored.exe and credstore-sandbox.exe.
@@ -28,7 +34,8 @@ param(
     # disk. A string so the MSI can pass its property as is.
     [string]$EncryptPageFile = '0',
     [switch]$Package,
-    [switch]$Uninstall
+    [switch]$Uninstall,
+    [switch]$DeleteData
 )
 $ErrorActionPreference = 'Stop'
 
@@ -49,6 +56,26 @@ function Invoke-Native {
     }
 }
 
+# Delete the data directory. SYSTEM (the MSI) can open everything in it. An elevated
+# administrator may not: older versions created the run folder for SYSTEM and the
+# service only, so take ownership of what cannot be opened, then grant Administrators.
+function Remove-DataDir {
+    if (-not (Test-Path $DataDir)) { return }
+    Remove-Item -Recurse -Force $DataDir -ErrorAction SilentlyContinue
+    for ($i = 0; ($i -lt 20) -and (Test-Path $DataDir); $i++) {
+        $locked = @()
+        Get-ChildItem -Recurse -Force $DataDir -ErrorAction SilentlyContinue -ErrorVariable denied | Out-Null
+        foreach ($e in $denied) { if ($e.TargetObject) { $locked += "$($e.TargetObject)" } }
+        if (-not $locked) { $locked = @($DataDir) }
+        foreach ($item in $locked) {
+            & takeown.exe /F $item /A 2>&1 | Out-Null
+            & icacls.exe $item /grant '*S-1-5-32-544:(OI)(CI)F' /C 2>&1 | Out-Null
+        }
+        Remove-Item -Recurse -Force $DataDir -ErrorAction SilentlyContinue
+    }
+    if (Test-Path $DataDir) { throw "could not delete $DataDir" }
+}
+
 function Remove-FromMachinePath([string]$Dir) {
     $path = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $kept = ($path -split ';') | Where-Object { $_ -and $_ -ne $Dir }
@@ -67,13 +94,25 @@ if ($Uninstall) {
         Remove-FromMachinePath $InstallDir
     }
     Say "removed the service and $InstallDir"
-    Write-Host "Kept (delete by hand if you want them gone): $DataDir (vault, policy, audit log)"
-    Write-Host "and the credstore-agents and credstore-approvers groups."
+    if ($DeleteData) {
+        Remove-DataDir
+        foreach ($g in $Groups) { Remove-LocalGroup -Name $g -ErrorAction SilentlyContinue }
+        Say "deleted $DataDir (vault, policy, audit log) and the credstore groups"
+        return
+    }
+    Write-Host "Kept: $DataDir (vault, policy, audit log) and the credstore-agents and"
+    Write-Host "credstore-approvers groups. To delete them too, run as administrator:"
+    if ($Package) {
+        Write-Host "  msiexec /x credstore-VERSION-x64.msi DELETEDATA=1"
+    } else {
+        Write-Host "  .\deploy\install.ps1 -Uninstall -DeleteData"
+    }
     return
 }
 
 # -------------------------------- install ---------------------------------
 
+if ($DeleteData) { throw '-DeleteData goes with -Uninstall' }
 if ($Package) { $From = $InstallDir }
 $binaries = 'credstore.exe', 'credstored.exe', 'credstore-sandbox.exe'
 foreach ($b in $binaries) {

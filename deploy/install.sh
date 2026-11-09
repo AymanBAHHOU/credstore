@@ -3,7 +3,7 @@
 # (launchd). Run as root:
 #
 #   sudo ./deploy/install.sh [--from DIR] [--user NAME]
-#   sudo ./deploy/install.sh --uninstall
+#   sudo ./deploy/install.sh --uninstall [--delete-data]
 #
 #   --from DIR   directory with the credstore and credstored binaries
 #                (default: target/release in the repository)
@@ -11,6 +11,9 @@
 #   --bin DIR    where the binaries live (default: /usr/local/bin)
 #   --package    called by a .deb/.rpm/.pkg: the binaries are already in --bin, the
 #                package manager owns them, and a missing --user is not an error
+#   --delete-data with --uninstall: also delete the vault, policy, audit log, the
+#                service account and the credstore groups. The secrets cannot be
+#                recovered afterwards.
 #
 # Safe to re-run: existing users, groups, vault, policy and audit log are kept.
 set -euo pipefail
@@ -19,6 +22,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 from="$here/../target/release"
 human="${SUDO_USER:-}"
 uninstall=0
+delete_data=0
 package=0
 bin=/usr/local/bin
 
@@ -50,14 +54,19 @@ while [ $# -gt 0 ]; do
         uninstall=1
         shift
         ;;
+    --delete-data)
+        delete_data=1
+        shift
+        ;;
     -h | --help)
-        sed -n '2,16p' "$0"
+        sed -n '2,19p' "$0"
         exit 0
         ;;
     *) die "unknown option: $1" ;;
     esac
 done
 
+[ "$delete_data" = 0 ] || [ "$uninstall" = 1 ] || die "--delete-data goes with --uninstall"
 [ "$(id -u)" = 0 ] || die "run as root (sudo)"
 os="$(uname -s)"
 case "$os" in
@@ -117,9 +126,34 @@ if [ "$uninstall" = 1 ]; then
         pkgutil --forget dev.credstore >/dev/null 2>&1 || true
     fi
     say "removed the service and the binaries"
+    if [ "$delete_data" = 1 ]; then
+        rm -rf "$data_dir" "$log_dir" /etc/credstore
+        if [ "$os" = Linux ]; then
+            rm -rf /run/credstore
+            # Without this, systemd-sysusers would create the account again at boot.
+            rm -f /etc/sysusers.d/credstore.conf
+            userdel "$svc_user" 2>/dev/null || true
+            for g in credstore-agents credstore-approvers "$svc_group"; do
+                groupdel "$g" 2>/dev/null || true
+            done
+        else
+            rm -rf /var/run/credstore
+            dscl . -delete "/Users/$svc_user" 2>/dev/null || true
+            for g in credstore-agents credstore-approvers "$svc_group"; do
+                dscl . -delete "/Groups/$g" 2>/dev/null || true
+            done
+        fi
+        say "deleted the vault, policy, audit log, the $svc_user account and the groups"
+        exit 0
+    fi
     echo "Kept (delete by hand if you want them gone): $data_dir (vault), /etc/credstore"
     echo "(policy), $log_dir (audit log), the $svc_user user and the credstore-agents and"
-    echo "credstore-approvers groups."
+    echo "credstore-approvers groups. To delete them too:"
+    if [ "$package" = 1 ] && [ "$os" = Linux ]; then
+        echo "  sudo apt purge credstore   (Debian, Ubuntu; for an .rpm see the README)"
+    else
+        echo "  sudo $0 --uninstall --delete-data"
+    fi
     exit 0
 fi
 

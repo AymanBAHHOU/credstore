@@ -113,6 +113,11 @@ fn responses_round_trip() {
                 name: "STRIPE_KEY".into(),
                 description: "Stripe test key".into(),
             }],
+            no_vault: false,
+        },
+        Response::Secrets {
+            secrets: vec![],
+            no_vault: true,
         },
         Response::RunResult(RunResult {
             exit_code: Some(0),
