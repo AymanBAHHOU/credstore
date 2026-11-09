@@ -119,11 +119,15 @@ pub fn resume_threads(pid: u32) -> io::Result<usize> {
     Ok(resumed)
 }
 
-/// Create `dir` with a protected DACL: full control for this user and SYSTEM only.
-/// Files created inside inherit it.
+/// Create `dir` with a protected DACL: full control for this user, SYSTEM and
+/// Administrators. Files created inside inherit it. Administrators can take any file
+/// anyway; listing them lets an elevated shell delete the service's leftovers (the run
+/// folder) without taking ownership first.
 pub fn create_private_directory(dir: &Path) -> io::Result<()> {
     let me = current_user_sid()?;
-    let sd = SecurityDescriptor::from_sddl(&format!("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;{me})"))?;
+    let sd = SecurityDescriptor::from_sddl(&format!(
+        "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;{me})"
+    ))?;
     let sa = SECURITY_ATTRIBUTES {
         nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
         lpSecurityDescriptor: sd.ptr(),

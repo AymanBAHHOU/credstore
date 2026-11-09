@@ -414,8 +414,14 @@ impl State {
     ) -> Response {
         match req {
             AgentRequest::ListSecrets => match self.vault.list() {
-                Ok(secrets) => Response::Secrets { secrets },
-                Err(VaultError::Missing(_)) => Response::Secrets { secrets: vec![] },
+                Ok(secrets) => Response::Secrets {
+                    secrets,
+                    no_vault: false,
+                },
+                Err(VaultError::Missing(_)) => Response::Secrets {
+                    secrets: vec![],
+                    no_vault: true,
+                },
                 Err(e) => error(ErrorCode::Internal, e.to_string()),
             },
             AgentRequest::Run(req) => match self.prepare_run(req, peer).await {

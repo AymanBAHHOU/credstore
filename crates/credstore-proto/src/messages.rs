@@ -297,6 +297,9 @@ pub enum GrantScope {
 pub enum Response {
     Secrets {
         secrets: Vec<SecretInfo>,
+        /// No vault has been created yet (the app opens its setup guide).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        no_vault: bool,
     },
     RunResult(RunResult),
     HttpResult(HttpResult),

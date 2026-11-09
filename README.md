@@ -91,7 +91,7 @@ The installers create the service account (`credstore`, `_credstore` on macOS,
 `credstore-approvers`, and add you to both. They also set up the directories with the
 permissions below, write a starter policy, and start the service. They are safe to
 re-run. `--uninstall` / `-Uninstall` removes the service and binaries but keeps the
-vault, policy and audit log.
+vault, policy and audit log (see [Uninstall](#uninstall) to delete them too).
 
 Then, as yourself:
 
@@ -328,6 +328,35 @@ if it can), that both endpoints answer as the real daemon, and whether your acco
 open the daemon's memory. With your passphrase, it shows the daemon's sandbox and each
 memory hardening feature, active or not. It also warns if Claude Code allowlists
 credstore's tools. It exits non-zero if anything failed.
+
+## Uninstall
+
+Removing credstore keeps your vault, policy and audit log, so an uninstall or an
+upgrade never loses your secrets: install again and they are still there. To delete
+them as well, along with the credstore groups and service account (the secrets cannot
+be recovered afterwards):
+
+| Installed with | Delete everything |
+| --- | --- |
+| `.msi` | as administrator: `msiexec /x credstore-VERSION-x64.msi DELETEDATA=1` |
+| `.deb` | `sudo apt purge credstore credstore-app` |
+| `.rpm` | first `sudo /usr/lib/credstore/install.sh --package --bin /usr/bin --uninstall --delete-data`, then `sudo dnf remove credstore credstore-app` |
+| `.pkg` | `sudo /usr/local/share/credstore/install.sh --uninstall --delete-data` |
+| from source | `sudo ./deploy/install.sh --uninstall --delete-data`, or `.\deploy\install.ps1 -Uninstall -DeleteData` as administrator |
+
+On Windows, use the `.msi` file you installed (removing from Settings > Apps keeps the
+data). Already uninstalled? The `.deb` purge works after a remove too. On Windows,
+delete `C:\ProgramData\credstore` from an elevated PowerShell, and the groups with
+`Remove-LocalGroup credstore-agents, credstore-approvers`. Versions before this one
+locked the `run` folder even to administrators, so take it over first:
+
+```powershell
+takeown /F "$env:ProgramData\credstore\run" /A /R
+icacls "$env:ProgramData\credstore\run" /grant "*S-1-5-32-544:(OI)(CI)F" /T /C
+Remove-Item -Recurse -Force "$env:ProgramData\credstore"
+```
+
+Uninstalling never touches Claude Code. To disconnect it: `claude mcp remove credstore`.
 
 ## Troubleshooting
 

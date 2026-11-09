@@ -1052,6 +1052,35 @@ approves with no passphrase typed and falls back to it while locked.
 `live_windows_hello_approves` (ignored) does the real enrol and sign, for a person at a
 machine with Hello. Unit tests cover CNG sign/verify and the wire format.
 
+## Uninstall and first run (2026-11-09)
+
+Found by the owner reinstalling on Windows:
+
+- **Removing keeps the data; deleting it is asked for explicitly.** A plain uninstall
+  (and every upgrade) keeps the vault, policy, audit log, groups and service account,
+  so an uninstall never costs the secrets. To delete them: `msiexec /x … DELETEDATA=1`
+  (passes `-DeleteData` to install.ps1; ignored when `UPGRADINGPRODUCTCODE` is set),
+  `apt purge` (the deb `postrm purge` deletes it itself, since install.sh is gone by
+  then), or `install.sh --uninstall --delete-data` / `install.ps1 -Uninstall
+  -DeleteData`. rpm has no purge, so the README gives the install.sh command to run
+  before `dnf remove`. On Linux the sysusers file goes too, or systemd would recreate
+  the account at boot. There is no checkbox in the MSI: Settings > Apps runs a removal
+  with no dialogs, so a property reachable from every path was preferred.
+- **Administrators are in the service's private directories on Windows.** They were
+  SYSTEM and the service only, so an elevated `Remove-Item` failed on `run\` and the
+  owner had to `takeown` it. Administrators can take any file anyway (spec non-goal), so
+  listing them adds no access, only convenience. install.ps1 `-DeleteData` still takes
+  over what it cannot open, for folders older versions made.
+- **The app's setup guide opens whenever there is no vault.** It remembered "guide
+  done" in its WebView storage (`%LOCALAPPDATA%\dev.credstore.app`), which survives an
+  uninstall, so a reinstall after deleting the data skipped it. `ListSecrets` now says
+  `no_vault` (no secret involved; the agent already sees the names), and the guide opens
+  when it is set, whatever the app remembers.
+- **The main window fits the screen.** 1180 x 780 is taller than the work area of a
+  1366 x 768 laptop or 1080p at 150 %, so the bottom sat under the taskbar. At start it
+  shrinks to the monitor's work area minus a 4 % margin each side and is centred
+  (`app/src/fit.rs`).
+
 ## Stubbed per OS
 
 | Capability      | Linux                 | macOS                 | Windows               |

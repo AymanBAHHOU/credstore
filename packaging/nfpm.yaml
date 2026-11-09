@@ -54,3 +54,4 @@ contents:
 scripts:
   postinstall: packaging/linux/postinstall.sh
   preremove: packaging/linux/preremove.sh
+  postremove: packaging/linux/postremove.sh

@@ -129,6 +129,17 @@ jobs:
         run: |
           sudo bash ./deploy/install.sh --uninstall
           ! test -e /usr/local/bin/credstored
+          sudo test -e /etc/credstore/policy.toml   # kept
+          sudo bash ./deploy/install.sh --uninstall --delete-data
+          ! sudo test -e /etc/credstore
+          if [ "$RUNNER_OS" = Linux ]; then
+            ! sudo test -e /var/lib/credstore
+            ! getent group credstore-agents
+            ! id credstore
+          else
+            ! sudo test -e /var/db/credstore
+            ! dscl . -read /Groups/credstore-agents
+          fi
 
       - name: No new logon needed (Windows)
         if: runner.os == 'Windows'
@@ -198,6 +209,18 @@ jobs:
         run: |
           .\deploy\install.ps1 -Uninstall
           if (Get-Service credstore -ErrorAction SilentlyContinue) { throw 'service still there' }
+          $data = "$env:ProgramData\credstore"
+          if (-not (Test-Path $data)) { throw 'the data directory was removed without -DeleteData' }
+          # A folder like older versions left: owned by SYSTEM and open to SYSTEM only, so
+          # an administrator must take it over to delete it.
+          $legacy = Join-Path $data 'run\legacy'
+          New-Item -ItemType Directory -Force $legacy | Out-Null
+          Set-Content (Join-Path $legacy 'tmp.txt') 'x'
+          icacls $legacy /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' | Out-Null
+          icacls $legacy /setowner '*S-1-5-18' /T | Out-Null
+          .\deploy\install.ps1 -Uninstall -DeleteData
+          if (Test-Path $data) { throw 'the data directory is still there' }
+          if (Get-LocalGroup credstore-agents -ErrorAction SilentlyContinue) { throw 'group still there' }
 
   # M8: build the real packages, install them like a user would (apt, installer, msiexec),
   # run the M7 smoke test against the packaged service, then remove the package.
@@ -275,6 +298,10 @@ jobs:
           ! systemctl is-active credstored.service
           ! test -e /usr/bin/credstored
           sudo test -d /var/lib/credstore   # the vault is kept
+          sudo apt-get purge -y credstore
+          ! sudo test -e /var/lib/credstore
+          ! sudo test -e /etc/credstore
+          ! getent group credstore-approvers
       - name: Check the .rpm (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -386,6 +413,20 @@ jobs:
           if (Test-Path "$env:ProgramFiles\credstore\credstore-sandbox.exe") { throw 'launcher still there' }
           if (Test-Path "$env:ProgramFiles\credstore\credstore-app.exe") { throw 'app still there' }
           if (-not (Test-Path "$env:ProgramData\credstore")) { throw 'the vault directory was removed' }
+      - name: Remove the .msi with DELETEDATA=1 (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $msi = (Get-ChildItem dist\credstore-*.msi).FullName
+          $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/l*v', 'msi-install2.log', "CREDSTOREUSER=$env:COMPUTERNAME\cssmoke" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content msi-install2.log -Tail 80; throw "msiexec /i failed ($($p.ExitCode))" }
+          $p = Start-Process msiexec.exe -ArgumentList '/x', "`"$msi`"", '/qn', '/l*v', 'msi-remove2.log', 'DELETEDATA=1' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content msi-remove2.log -Tail 80; throw "msiexec /x failed ($($p.ExitCode))" }
+          if (Test-Path "$env:ProgramData\credstore") {
+            Get-Content msi-remove2.log | Select-String -Pattern 'WixQuietExec|install.ps1|==>|error' -Context 0,2
+            throw 'DELETEDATA=1 left the data directory'
+          }
+          if (Get-LocalGroup credstore-agents -ErrorAction SilentlyContinue) { throw 'group still there' }
 
       - uses: actions/upload-artifact@v4
         with:

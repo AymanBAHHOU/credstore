@@ -393,7 +393,7 @@ async fn endpoint_checks(d: &mut Doctor<'_>, client: &Client) -> Option<u32> {
                 drop(stream);
                 let detail = if kind == EndpointKind::Agent {
                     match client.agent(&AgentRequest::ListSecrets).await {
-                        Ok(Response::Secrets { secrets }) => {
+                        Ok(Response::Secrets { secrets, .. }) => {
                             format!("{} secret(s) listed", secrets.len())
                         }
                         Ok(other) => {

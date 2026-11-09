@@ -16,6 +16,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod fit;
 mod island;
 
 use std::collections::HashSet;
@@ -449,6 +450,11 @@ fn main() {
             page_ready,
         ])
         .setup(|app| {
+            if let Some(w) = app.get_webview_window("main") {
+                if let Err(e) = fit::fit_to_screen(&w) {
+                    eprintln!("credstore-app: could not fit the window to the screen: {e}");
+                }
+            }
             let open = MenuItem::with_id(app, "open", "Open credstore", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &quit])?;

@@ -42,6 +42,9 @@ pub struct Overview {
     /// Why the daemon could not be reached, with what to do.
     pub error: Option<String>,
     pub secrets: Vec<SecretInfo>,
+    /// No vault yet: the app opens its setup guide, even if it was finished before (a
+    /// reinstall after the data was deleted).
+    pub no_vault: bool,
     /// This user has a credstore key in Windows Hello (M13). The vault may not trust it
     /// (a key left from an older vault): compare `hello_key_id` with
     /// `Feed::approval_keys`.
@@ -160,19 +163,25 @@ impl Api {
             Mode::Installed => "installed",
             Mode::Dev => "dev",
         };
-        let (reachable, error, secrets) = match self.client.agent(&AgentRequest::ListSecrets).await
-        {
-            Ok(Response::Secrets { secrets }) => (true, None, secrets),
-            Ok(other) => (false, Some(response_error(other).to_string()), Vec::new()),
-            Err(e) => (
-                false,
-                Some(format!(
-                    "{e:#}. If credstore was just installed, sign out and back in, or \
+        let (reachable, error, secrets, no_vault) =
+            match self.client.agent(&AgentRequest::ListSecrets).await {
+                Ok(Response::Secrets { secrets, no_vault }) => (true, None, secrets, no_vault),
+                Ok(other) => (
+                    false,
+                    Some(response_error(other).to_string()),
+                    Vec::new(),
+                    false,
+                ),
+                Err(e) => (
+                    false,
+                    Some(format!(
+                        "{e:#}. If credstore was just installed, sign out and back in, or \
                      reinstall; the Health page shows what is wrong."
-                )),
-                Vec::new(),
-            ),
-        };
+                    )),
+                    Vec::new(),
+                    false,
+                ),
+            };
         let hello_key_id = credstore_os::approval_key::hello::public_key()
             .ok()
             .map(|k| credstore_os::approval_key::key_id(&k));
@@ -189,6 +198,7 @@ impl Api {
                     description: printable(&s.description),
                 })
                 .collect(),
+            no_vault,
             hello: hello_key_id.is_some(),
             hello_key_id,
             hello_available: credstore_os::approval_key::supported()

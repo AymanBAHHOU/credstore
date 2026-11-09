@@ -156,7 +156,7 @@ pub async fn set(
 
 pub async fn list(client: &Client, out: &mut dyn Write, msg: &mut dyn Write) -> anyhow::Result<()> {
     let infos = match client.agent(&AgentRequest::ListSecrets).await? {
-        Response::Secrets { secrets } => secrets,
+        Response::Secrets { secrets, .. } => secrets,
         other => return Err(response_error(other)),
     };
     if infos.is_empty() {
